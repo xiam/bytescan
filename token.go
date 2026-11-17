@@ -1,6 +1,6 @@
 package bytescan
 
-import "github.com/xiam/textreader"
+import "github.com/xiam/bytescan/cursor"
 
 // TokenType is a string identifier for a class of token, e.g., "IDENTIFIER".
 type TokenType string
@@ -27,7 +27,7 @@ type Token struct {
 	text   []rune
 	offset int
 
-	span textreader.Span
+	span cursor.Span
 }
 
 // inlineTokenRunes is the longest token text, in runes, that the scanner
@@ -70,7 +70,7 @@ func NewTokenFromString(typ TokenType, text string, offset int) *Token {
 // NewTokenWithSpan creates a Token from its text and the source span it
 // covers. The rune offset reported by Offset is taken from the span, so the
 // compatible accessor and the span agree.
-func NewTokenWithSpan(typ TokenType, text []rune, span textreader.Span) *Token {
+func NewTokenWithSpan(typ TokenType, text []rune, span cursor.Span) *Token {
 	return &Token{
 		typ:    typ,
 		text:   text,
@@ -117,7 +117,7 @@ func (l *Token) Len() int {
 
 // Span returns the source span the token covers: a half-open range with byte
 // offset, rune offset, line, and rune column at both ends.
-func (l *Token) Span() textreader.Span {
+func (l *Token) Span() cursor.Span {
 	return l.span
 }
 

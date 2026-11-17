@@ -8,7 +8,7 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	"github.com/xiam/bytescan"
-	"github.com/xiam/textreader"
+	"github.com/xiam/bytescan/cursor"
 )
 
 // TestScannerRetentionFailureConsumesNothing covers a token rejected by a
@@ -17,7 +17,7 @@ import (
 // middle of the rejected token.
 func TestScannerRetentionFailureConsumesNothing(t *testing.T) {
 	t.Run("cursor bound", func(t *testing.T) {
-		cur := textreader.NewReader(strings.NewReader("abcdef"), textreader.WithMaxRetained(3))
+		cur := cursor.NewReader(strings.NewReader("abcdef"), cursor.WithMaxRetained(3))
 
 		lx := bytescan.NewWithCursor(cur)
 		lx.MustAddRule(lexTypeWord, newASCIILettersRule())
@@ -26,7 +26,7 @@ func TestScannerRetentionFailureConsumesNothing(t *testing.T) {
 			lex, err := lx.Next()
 			require.Error(t, err)
 			assert.Nil(t, lex)
-			assert.ErrorIs(t, err, textreader.ErrRetentionExceeded)
+			assert.ErrorIs(t, err, cursor.ErrRetentionExceeded)
 			assert.Equal(t, 0, cur.Cursor().ByteOffset(), "a rejected token must consume nothing")
 		}
 
@@ -46,7 +46,7 @@ func TestScannerRetentionFailureConsumesNothing(t *testing.T) {
 			lex, err := lx.Next()
 			require.Error(t, err)
 			assert.Nil(t, lex)
-			assert.ErrorIs(t, err, textreader.ErrRetentionExceeded)
+			assert.ErrorIs(t, err, cursor.ErrRetentionExceeded)
 		}
 
 		// Without the rewind the retry would read the remaining three bytes,
@@ -110,7 +110,7 @@ func TestScannerContextSurvivesFailedNext(t *testing.T) {
 	lex, err := lx.Next()
 	require.Error(t, err)
 	assert.Nil(t, lex)
-	assert.ErrorIs(t, err, textreader.ErrRetentionExceeded)
+	assert.ErrorIs(t, err, cursor.ErrRetentionExceeded)
 
 	ctx, err := lx.Context(second, 0, 0)
 	require.NoError(t, err)
@@ -164,7 +164,7 @@ func TestScannerMaxTokenBytesAcrossWindow(t *testing.T) {
 // its context window, another consumer can read the remainder through the same
 // finite-retention cursor.
 func TestScannerReleaseHandsOffSharedCursor(t *testing.T) {
-	cur := textreader.NewReader(strings.NewReader("abcdef"), textreader.WithMaxRetained(3))
+	cur := cursor.NewReader(strings.NewReader("abcdef"), cursor.WithMaxRetained(3))
 
 	lx := bytescan.NewWithCursor(cur)
 	lx.MustAddRule(lexTypeWord, newExactRuneRule('a'))

@@ -34,7 +34,7 @@ var (
 
 	// ErrTokenTooLarge is returned by Next when a token would exceed the
 	// bound set with WithMaxTokenBytes. The same error also matches
-	// textreader.ErrRetentionExceeded, which a cursor's own retention budget
+	// cursor.ErrRetentionExceeded, which a cursor's own retention budget
 	// returns as well; only the scanner's per-token bound matches
 	// ErrTokenTooLarge.
 	ErrTokenTooLarge = errors.New("bytescan: token too large")

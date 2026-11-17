@@ -1,0 +1,289 @@
+# cursor
+
+Package `cursor` (`github.com/xiam/bytescan/cursor`) reads text or binary
+streams while tracking the exact position of every read and the surrounding
+input. This is useful for parsers, lexers, and any application that benefits
+from providing detailed context around the current read position.
+
+The package is part of the bytescan module, but it does not depend on the rest
+of bytescan: its non-test files import only the standard library and
+`cursor/position`, and a test enforces that. Any program can import
+`github.com/xiam/bytescan/cursor` on its own, without the scanner.
+
+This package was `github.com/xiam/textreader`. It moved here with its history;
+the type `TextReader` is now `Reader`, and every other exported name is
+unchanged.
+
+## Features
+
+- **Position Tracking**: Automatically tracks line, column (in runes), and byte
+  offset as you read
+- **Unicode Support**: Properly handles UTF-8 encoded text including multi-byte
+  characters. Column counts characters (runes), not bytes, so a line with
+  `"hello 🌍"` reports column 7 after reading the emoji, not column 10.
+- **Multiple Read Methods**: Read by rune or arbitrary byte chunks
+- **Unread Support**: Single-level unread for runes via `UnreadRune()`
+- **Seeking**: Navigate to specific positions within the buffered data using `Seek()`
+- **Positioned cursor**: Immutable positions, spans, and located runes; logical
+  checkpoints with exact replay; and non-mutating access to the retained text —
+  see [Positioned cursor](#positioned-cursor)
+- **Byte mode**: `NewByteReader` reads binary input one byte per rune, with
+  exact file offsets — see [Byte mode](#byte-mode)
+
+## Use Cases
+
+This package is ideal for:
+- **Text parsers and lexers** that need precise error location reporting
+- **Configuration file readers** where you need to report line/column of syntax errors
+- **Template processors** that need to track position for error messages
+
+This package is **not suitable** for:
+- Random access to large files (use `os.File` instead)
+- High-performance streaming where position tracking isn't needed
+- Binary data processing through the text constructors, which decode UTF-8
+  (use [`NewByteReader`](#byte-mode) instead)
+
+## Code Example
+
+```go
+package main
+
+import (
+    "fmt"
+    "io"
+    "log"
+    "strings"
+
+    "github.com/xiam/bytescan/cursor"
+)
+
+func main() {
+    data := "Hello\nWorld 🌍"
+    reader := cursor.New(strings.NewReader(data))
+
+    for {
+        r, _, err := reader.ReadRune()
+        if err != nil {
+            if err == io.EOF {
+                break // We've reached the end of the file
+            }
+            log.Fatalf("Error reading rune: %v", err) // Handle unexpected errors
+        }
+
+        pos := reader.Pos()
+        fmt.Printf("Rune: %c at line %d, column %d\n",
+            r, pos.Line(), pos.Column())
+    }
+}
+```
+
+## Positioned cursor
+
+The cursor layer is for callers that must read ahead before they commit to what
+they read: lexers running rules in parallel, maximal-munch scanners, or any
+parser that needs to peek beyond the current token. It is built on the same
+buffered reader as the basic layer, so `Read`, `ReadRune`, `UnreadRune`, `Seek`,
+and `Pos` keep working unchanged.
+
+```go
+tr := cursor.New(strings.NewReader("hello 世界\n"))
+
+mark := tr.Checkpoint()          // start retaining input from here
+defer mark.Release()
+
+first, _ := tr.ReadLocatedRune() // lr is a rune plus the position it came from
+last := first
+for last.Rune() != '\n' {
+    last, _ = tr.ReadLocatedRune()
+}
+
+span := cursor.NewSpan(first.Pos(), last.End())
+text, _ := tr.SpanText(span)          // "hello 世界\n" — the cursor has not moved
+around, _ := tr.Context(span, 4, 4)   // a little text on each side
+
+_ = mark.Reset()                      // replay the same runes exactly
+```
+
+### What the cursor layer adds
+
+- **`Pos`** — an immutable position: byte offset, rune offset, 1-based line, and
+  0-based rune column. `Cursor()` returns the logical next-read position.
+- **`Span`** — an immutable half-open range, built with `NewSpan`.
+- **`LocatedRune`** — a rune with the position it was read from, returned by
+  `ReadLocatedRune`. `PeekRune` reports the rune at the cursor without consuming
+  it.
+- **`Checkpoint`** — `Checkpoint()` marks the logical position. `Reset()` returns
+  the cursor to it and replays the input exactly, including across multi-byte
+  runes, newlines, and end of input. `Commit()` accepts the current position and
+  drops the retained input; `Release()` abandons the checkpoint whatever the
+  cursor is. A checkpoint may be reset repeatedly until it is committed or
+  released; after that, every method on it returns `ErrCheckpointReleased`.
+- **`Remark`** — re-arms a released checkpoint value at the current position
+  instead of allocating a fresh one, for callers that own a fixed set of
+  checkpoint slots. See [Reusing checkpoints](#reusing-checkpoints).
+- **`SpanText` / `Context`** — non-mutating access to the retained bytes, for
+  diagnostics. Neither moves the cursor.
+- **`Cursor()` / `Pos()`** — the logical position, never physical read-ahead.
+  Bytes pulled into the buffer for look-ahead are invisible until they are
+  actually read.
+
+### Checkpoints, retention, and invalidation
+
+While at least one checkpoint is active the reader retains every byte from the
+oldest active checkpoint onward, so a reset can always replay. That has three
+consequences worth knowing:
+
+- **Nested checkpoints nest their retention.** The reader keeps input from the
+  oldest active checkpoint; releasing an inner checkpoint does not release the
+  input an outer one still needs.
+- **The cursor may not seek behind the oldest active checkpoint's data.** `Seek`
+  still only moves within buffered data, and buffered data now starts at the
+  oldest checkpoint.
+- **Retention ends when the last relevant checkpoint is committed or released.**
+  Up to that point, spans from the retained region stay readable by `SpanText`
+  and `Context`. Afterwards those bytes are no longer retained and the same call
+  returns `ErrPositionOutOfBuffer` — deterministically, even if the bytes happen
+  to still sit in the buffer. Recoverable spans are the ones built from located
+  runes read while a checkpoint was open.
+
+`Commit` additionally refuses when the logical cursor is behind the mark
+(`ErrCheckpointRewound`), because the replayed range has not been decided yet;
+`Release` has no such precondition.
+
+### Bounding retained input
+
+`WithMaxRetained(n)` caps the bytes held for checkpoint replay:
+
+```go
+tr := cursor.NewReader(src,
+    cursor.WithCapacity(4096),
+    cursor.WithMaxRetained(1<<20),
+)
+```
+
+- The limit applies **only while a checkpoint is active**. A basic reader with
+  no checkpoint retains nothing extra and pays no cost, which is why the default
+  is unbounded.
+- It bounds the **retained region**: the bytes from the oldest active checkpoint
+  to the logical cursor, which is exactly what a `Reset` has to replay. It is
+  enforced where the cursor would advance, so a read that would exceed the limit
+  fails with `ErrRetentionExceeded`, moves the cursor by nothing, and consumes
+  nothing. The budget is judged against the bytes that would really advance the
+  cursor, not the size of the caller's destination, so a large `Read` still
+  returns the few bytes that are available; only a request that would truly
+  advance past the budget is refused whole. A rune that cannot fit the remaining
+  budget is reported whole — never half-decoded.
+- Read-ahead **in front of** the cursor is bounded by the buffer capacity rather
+  than by this limit, and it stays bounded while the cursor cannot advance.
+- Without a limit, a checkpoint held across a large read-ahead grows the buffer
+  as needed, which is what makes a long token recoverable.
+
+### Reusing checkpoints
+
+`Checkpoint` allocates a new value on every call. A consumer that makes a
+mark per token — a maximal-munch lexer, for example — pays that allocation for
+every token even though it only keeps a bounded window of marks. `Remark`
+exists for exactly that caller: it re-arms a released checkpoint value at the
+current logical position, so the same value can stand in for a fresh mark.
+
+```go
+slot := tr.Checkpoint() // arm the slot once, at the first token
+
+for {
+    token, err := scan(tr) // speculative read from the mark
+    if err != nil {
+        break
+    }
+    if err := slot.Release(); err != nil { // end this token's mark
+        break
+    }
+    if err := tr.Remark(slot); err != nil { // re-arm the same value, no allocation
+        break
+    }
+}
+```
+
+- Re-arming is **opt-in and additive**: `Checkpoint` and the constructors are
+  unchanged, and a caller that never calls `Remark` behaves exactly as before.
+- **Only a released value may be re-armed.** An active checkpoint — on this
+  reader or another — is refused with `ErrCheckpointActive` and left untouched,
+  so a mark another consumer still relies on is never retargeted. A nil value
+  is refused with `ErrCheckpointReleased`.
+- A released value **carries no reader reference**, so it may be re-armed on any
+  reader, including a different one. The reader pointer is claimed by
+  compare-and-swap, so one value is active on at most one reader at a time.
+- After a successful `Remark` the value is active and behaves exactly like a
+  fresh mark: `Pos` reports the marked position, `Reset` replays the input read
+  since the mark, and `Commit` or `Release` ends the retention. The reader
+  retains from the oldest active checkpoint as usual, and the retention limit
+  applies to a re-armed checkpoint the same way it applies to a fresh one.
+- The allocation cost is therefore **bounded by the number of slots** the caller
+  owns, not by the number of marks made.
+- **A reusable checkpoint is one shared mutable slot.** Re-arming changes what
+  every alias of the value refers to: a reference retained from before
+  `Release` silently regains `Pos`, `Reset`, `Commit`, and `Release` authority
+  over the new mark the moment the slot is re-armed. The reader cannot
+  distinguish generations of a reused slot and cannot detect the misuse. Keep
+  all references to a released slot under one logical owner — do not retain or
+  use stale references after handing the slot back for reuse.
+
+### Rune sources
+
+`NewRuneReader` wraps an `io.RuneReader` in the same cursor. The runes are
+encoded back into the reader's buffer so byte offsets remain meaningful; no
+bytes are decoded, because the caller's rune reader already did that. Callers whose
+source only implements `io.RuneReader` keep working this way, and byte-stream callers use `New`/`NewReader` and never pay for a second
+decoder.
+
+A reader failure from the underlying source is sticky: replaying from a
+checkpoint reproduces the same error instead of whatever the source would report
+on a second pass.
+
+### Byte mode
+
+`NewByteReader` builds the same cursor for binary input. It takes the same
+options as `NewReader`, and it decodes nothing: each byte is one rune, U+0000 to
+U+00FF, of size 1.
+
+```go
+tr := cursor.NewByteReader(conn, cursor.WithMaxRetained(64<<10))
+
+lr, _ := tr.ReadLocatedRune() // the byte 0xFF is rune 0xFF of size 1
+off := lr.Pos().ByteOffset()  // the file offset of that byte
+```
+
+- `ByteOffset` and `RuneOffset` are both the file offset.
+- The byte 0x0A ends a line, and `Column` counts the bytes since the last 0x0A.
+  A protocol that mixes text lines and binary fields keeps its line positions.
+- `Read`, `SpanText`, and `Context` return the raw input bytes.
+- `Seek`, `UnreadRune`, `Checkpoint`, `Reset`, `Remark`, and `WithMaxRetained`
+  work on file offsets. A checkpoint over n bytes retains n bytes.
+
+Before byte mode, binary input went through `NewRuneReader` with an adapter
+that maps each byte to a rune. The cursor stores those runes as UTF-8, so a byte
+of 0x80 or above takes two bytes in the buffer, and its offsets are not file
+offsets. Byte mode removes both effects.
+
+## Important Limitations
+
+- **Seeking is limited to buffered data only.** Unlike `os.File.Seek()`, this
+  implementation cannot seek to arbitrary positions in the underlying stream.
+  It can only move within the data currently held in the reader's buffer.
+- **`Seek(0, io.SeekStart)` may fail** if the beginning of the stream has
+  already been read and discarded from the buffer.
+- Seeking **does not affect the underlying `io.Reader`**.
+- **Only single-level unread operations are supported.** You can only unread
+  the most recently read rune via `UnreadRune()`. Calling it twice in a row
+  without an intermediate read will result in an error. Use `Seek()` for more
+  flexible backward navigation.
+- **Position tracking assumes UTF-8 encoded text** in the text constructors.
+  While they can process any byte stream, the line and column counts will only
+  be accurate for valid UTF-8 text. `NewByteReader` counts bytes instead.
+- **Column counts runes, Offset counts bytes.** `Column()` returns the number of
+  Unicode characters (runes) since the last newline. `Offset()` returns the
+  total number of bytes read from the stream.
+
+## License
+
+MIT License; see [LICENSE.md](../LICENSE.md) at the root of the
+bytescan repository.

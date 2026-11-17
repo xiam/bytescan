@@ -9,8 +9,8 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	"github.com/xiam/bytescan"
+	"github.com/xiam/bytescan/cursor"
 	"github.com/xiam/bytescan/rules/core"
-	"github.com/xiam/textreader"
 )
 
 // sliceSource is a Source that returns its tokens in order and then err, or
@@ -180,7 +180,7 @@ func TestWithType(t *testing.T) {
 	assert.Equal(t, bytescan.TokenType("B"), m.Type())
 	assert.Equal(t, "xyz", m.Text())
 	assert.Equal(t, 7, m.Offset())
-	assert.Equal(t, textreader.Span{}, m.Span())
+	assert.Equal(t, cursor.Span{}, m.Span())
 }
 
 func TestNewEmptyToken(t *testing.T) {
@@ -201,7 +201,7 @@ func TestNewEmptyToken(t *testing.T) {
 	assert.Equal(t, bytescan.TokenType("END"), e.Type())
 	assert.Equal(t, "", e.Text())
 	assert.Zero(t, e.Len())
-	assert.Equal(t, textreader.NewSpan(pos, pos), e.Span())
+	assert.Equal(t, cursor.NewSpan(pos, pos), e.Span())
 	assert.Equal(t, pos.RuneOffset(), e.Offset())
 	assert.Equal(t, pos.ByteOffset(), e.ByteOffset())
 	assert.Equal(t, 2, e.Line())

@@ -9,24 +9,22 @@
 //
 // # Positions
 //
-// Because every byte is one rune, Token.Offset, Token.RuneOffset and
-// Token.Len are byte offsets and byte lengths in the input. Use Offset and
-// Len for positions in binary data; Hex prints Offset.
-//
-// The current cursor counts its other positions on a UTF-8 encoding of the
-// runes. With the current implementation, Token.ByteOffset and Span.Bytes
-// count a byte of 0x80 or above as two bytes, so they are not offsets in the
-// input, and Line and Column advance at every 0x0A byte, so they are not
-// positions in the input either. These are current limits of the cursor, not
-// a contract of this package. A byte mode in textreader will remove them, and
-// this package will switch to it.
+// NewCursor returns a byte-mode cursor (cursor.NewByteReader). Every position
+// it reports is a position in the input: Token.Offset, Token.RuneOffset and
+// Token.ByteOffset are all the file offset of the token, and Token.Len and
+// Span.Bytes are its length in bytes. The byte 0x0A ends a line, and Column
+// counts the bytes since the last 0x0A, so Line and Column also locate a
+// byte in the input. Hex prints Offset. Scanner.Context returns the raw bytes
+// of the input around a token.
 //
 // # Token guards
 //
-// bytescan.WithMaxTokenBytes counts the bytes of the cursor's encoding, so
-// with the current cursor a byte of 0x80 or above costs two bytes against
-// the guard. A guard for binary input is therefore twice the largest token in
-// bytes when the input can hold such bytes.
+// bytescan.WithMaxTokenBytes counts one for each byte on a NewCursor cursor,
+// so the guard for binary input is the largest token in bytes.
+//
+// A cursor built with cursor.NewRuneReader over NewReader keeps the limits of
+// the rune path: it counts its positions and its guard on a UTF-8 encoding of
+// the runes, so a byte of 0x80 or above counts as two bytes (see NewReader).
 //
 // # Fields read by a driver
 //
@@ -46,8 +44,8 @@ import (
 	"strings"
 
 	"github.com/xiam/bytescan"
+	"github.com/xiam/bytescan/cursor"
 	"github.com/xiam/bytescan/rules/core"
-	"github.com/xiam/textreader"
 )
 
 // AnyByte is the class of every byte: the runes U+0000 to U+00FF.
@@ -67,6 +65,12 @@ func (b byteRunes) ReadRune() (rune, int, error) {
 // NewReader returns an io.RuneReader that reads r and returns each byte as
 // one rune, U+0000 to U+00FF, of size 1. When r is not an io.ByteReader, it
 // is wrapped in a bufio.Reader.
+//
+// A cursor built with cursor.NewRuneReader over NewReader encodes the runes
+// as UTF-8: its ByteOffset and Span.Bytes count a byte of 0x80 or above as
+// two bytes, and a guard such as bytescan.WithMaxTokenBytes counts it twice,
+// so they are not offsets and lengths in the input. Use NewCursor for a cursor
+// whose positions and guards count bytes.
 func NewReader(r io.Reader) io.RuneReader {
 	br, ok := r.(io.ByteReader)
 	if !ok {
@@ -75,15 +79,16 @@ func NewReader(r io.Reader) io.RuneReader {
 	return byteRunes{br}
 }
 
-// NewCursor returns a cursor over NewReader(r), for bytescan.NewWithCursor
-// and bytescan.NewWithCursorOptions.
+// NewCursor returns a byte-mode cursor over r, cursor.NewByteReader(r), for
+// bytescan.NewWithCursor and bytescan.NewWithCursorOptions. It reads each
+// byte of r as one rune, U+0000 to U+00FF, of size 1.
 //
-// Offset, RuneOffset and Len of the tokens read through it are byte offsets
-// and byte lengths. With the current implementation, ByteOffset, Line and
-// Column are not positions in the input; use Offset for positions (see the
-// package documentation).
-func NewCursor(r io.Reader) *textreader.TextReader {
-	return textreader.NewRuneReader(NewReader(r))
+// Every position of the tokens read through it is a position in the input,
+// and a token guard counts its bytes (see the package documentation). A
+// caller that needs cursor options, such as cursor.WithMaxRetained, calls
+// cursor.NewByteReader(r, opts...) directly.
+func NewCursor(r io.Reader) *cursor.Reader {
+	return cursor.NewByteReader(r)
 }
 
 // Text returns the string whose runes are the bytes of s, the text a rule
@@ -135,7 +140,7 @@ func Read(cur bytescan.Cursor, typ bytescan.TokenType, n int) (*bytescan.Token, 
 	if len(text) == 0 {
 		return nil, nil
 	}
-	return bytescan.NewTokenWithSpan(typ, text, textreader.NewSpan(start, cur.Cursor())), nil
+	return bytescan.NewTokenWithSpan(typ, text, cursor.NewSpan(start, cur.Cursor())), nil
 }
 
 // Peek returns the next n bytes of cur, or fewer when the input ends first,

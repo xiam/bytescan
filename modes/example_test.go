@@ -6,9 +6,9 @@ import (
 	"strings"
 
 	"github.com/xiam/bytescan"
+	"github.com/xiam/bytescan/cursor"
 	"github.com/xiam/bytescan/modes"
 	"github.com/xiam/bytescan/rules/core"
-	"github.com/xiam/textreader"
 )
 
 // A string in this small language is quoted with ' or ", and the other quote
@@ -18,7 +18,7 @@ import (
 // quote it switches back to code mode. The cache builds one string scanner per
 // quote, on first use.
 func Example() {
-	cur := textreader.New(strings.NewReader(`say "it's" and 'a "b"' twice "x"`))
+	cur := cursor.New(strings.NewReader(`say "it's" and 'a "b"' twice "x"`))
 
 	code := bytescan.NewWithCursor(cur)
 	code.MustAddRule("WORD", core.RuneRun(core.RuneRange('a', 'z')))

@@ -160,7 +160,7 @@ available out of the box.
 - **Maximal munch** — the engine selects the *longest* accepted match as the next
   token. **Current contract** (`rulesProcessor.pickBestMatch`, `processor.go`).
 - **Cursor** — the positioned text stream the scanner reads through, provided by
-  `github.com/xiam/textreader`. It owns reading, buffering, positions,
+  `github.com/xiam/bytescan/cursor`. It owns reading, buffering, positions,
   checkpoints, and replay. The scanner owns no text-stream mechanics.
   **Current contract** (the package doc and `Cursor`, `bytescan.go`).
 - **Checkpoint** — a marked logical position on the cursor that the engine uses

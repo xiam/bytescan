@@ -25,6 +25,36 @@ behavior. The reusable rules are described in
 bytescan scans streams of text or binary data into classified tokens; what you
 do with them, including parsing, is up to you.
 
+## Moving to v0.4.0: the cursor is `bytescan/cursor`
+
+From v0.4.0 the positioned cursor is a package of this module,
+[`github.com/xiam/bytescan/cursor`](cursor), instead of the separate module
+`github.com/xiam/textreader`. It imports only the standard library, so a
+program can use it without the scanner. Every exported name of bytescan that
+named a textreader type now names the cursor type: the `Cursor` interface,
+`Token.Span`, `NewTokenWithSpan`, `bytesource.NewCursor` and the others.
+
+| textreader v0.4.0 | bytescan v0.4.0 |
+|---|---|
+| `github.com/xiam/textreader` | `github.com/xiam/bytescan/cursor` |
+| `textreader.TextReader` | `cursor.Reader` |
+| `textreader.LocatedRune`, `Pos`, `Span`, `Checkpoint`, `New`, `NewReader`, `NewRuneReader`, `WithMaxRetained`, `ErrRetentionExceeded`, ... | the same names in `cursor` |
+
+`bytesource.NewCursor` now returns a byte-mode cursor (`cursor.NewByteReader`),
+so every position of a binary stream is a position in the input:
+`ByteOffset`, `Span.Bytes`, `Line` and `Column` are exact, `Context` returns
+the raw bytes, and `WithMaxTokenBytes` counts one for each byte.
+
+To migrate:
+
+1. Replace the import path `github.com/xiam/textreader` with
+   `github.com/xiam/bytescan/cursor` (and `textreader.` with `cursor.`), and
+   `textreader.TextReader` with `cursor.Reader`.
+2. A byte guard that was doubled for bytes of 0x80 or above can be halved: on
+   a `bytesource.NewCursor` cursor it counts bytes.
+3. Run `go get github.com/xiam/bytescan@v0.4.0` and `go mod tidy`; textreader
+   drops out of `go.mod` unless another dependency needs it.
+
 ## Renamed from textlexer
 
 This project was called textlexer, with the module path
@@ -119,8 +149,9 @@ versions, `@v0.2.5` and earlier, keep building.
     [ssejson](https://github.com/xiam/bytescan-examples/tree/main/streams/ssejson) example.
 - **Full source positions.** Every token carries a half-open span with byte
   offset, rune offset, 1-based line, and 0-based rune column at both ends.
-  Through `bytesource`, `Offset` and `Len` are the byte offset and length in
-  the input.
+  Through `bytesource`, every position is a position in the input: `Offset`
+  and `ByteOffset` are the file offset, `Len` and `Span.Bytes` the length in
+  bytes, `Line` advances on each 0x0A byte, and `Column` counts bytes.
 - **Safe to drive concurrently.** Multiple goroutines can call `Next()` on one
   scanner; the token stream stays deterministic and complete.
 - **Long-running streams in bounded memory.** An optional per-token byte bound
@@ -147,13 +178,6 @@ versions, `@v0.2.5` and earlier, keep building.
   a second `AddRule` with the same name returns an error. To give several
   forms one type, combine them into one rule with `core.Choice`, for example
   `core.Choice(base.Float(), base.Decimal(), base.Integer())`.
-- **Byte positions other than `Offset` and `Len` are not exact yet.** The
-  byte adapter runs on the text cursor, which counts its other positions on a
-  UTF-8 encoding of the symbols. For binary input, `ByteOffset` and
-  `Span.Bytes` count a byte of 0x80 or above as two bytes, `Line` and
-  `Column` advance at every 0x0A byte, and `WithMaxTokenBytes` charges two
-  bytes for a byte of 0x80 or above. Use `Offset` and `Len`. A byte-exact
-  cursor is planned (see Future work).
 - **Case-insensitive keywords use simple case folding only.**
   `core.KeywordsIgnoreCase` and `core.AnyLiteralIgnoreCase` fold as
   `core.LiteralIgnoreCase` does: Unicode simple case folding, rune by rune, so
@@ -185,8 +209,7 @@ versions, `@v0.2.5` and earlier, keep building.
   nothing more. Anything structural is the consumer's job.
 
 **Future work.** On top of the current engine: named rules and post-match
-actions in a layer above `Next()`; a byte mode in the cursor, so that every
-position of a binary stream is a byte position; and eventually declarative
+actions in a layer above `Next()`; and eventually declarative
 frontends (for example, a schema- or table-driven way of declaring rules) that compile down to the same engine. These are
 direction, not commitments — the spec marks each as intended or open.
 
@@ -373,11 +396,12 @@ behalf, and it only reports what matched; see the
 [VM design principles](docs/specs/design-principles.md#vm-design-principles).
 
 Reading, buffering, positions, and replay come from a positioned cursor —
-[`github.com/xiam/textreader`](https://github.com/xiam/textreader). The cursor
-decodes UTF-8, tracks the logical position, retains the input a checkpoint needs,
-and restores a marked position exactly. For binary input,
-`bytesource.NewCursor` builds the same cursor over a reader that returns each
-byte as one rune, U+0000 to U+00FF, and the scanner reads it as it reads text.
+[`github.com/xiam/bytescan/cursor`](cursor), a package of this module that
+imports only the standard library. The cursor decodes UTF-8, tracks the logical
+position, retains the input a checkpoint needs, and restores a marked position
+exactly. For binary input, `bytesource.NewCursor` builds a byte-mode cursor
+(`cursor.NewByteReader`) that reads each byte as one rune, U+0000 to U+00FF,
+and reports file offsets; the scanner reads it as it reads text.
 
 `New` accepts the same `io.RuneReader` it always did. A source that also
 implements `io.Reader` is read as a byte stream by the cursor, so no extra UTF-8
@@ -416,11 +440,11 @@ span.
 While a token is being assembled the scanner holds a checkpoint, so
 `WithMaxTokenBytes(n)` bounds how many source bytes one token may retain. A token
 that exceeds the bound fails with an error wrapping
-`textreader.ErrRetentionExceeded` instead of growing without limit, and the
+`cursor.ErrRetentionExceeded` instead of growing without limit, and the
 cursor is rewound to the token start, so a failed `Next` consumes nothing. The
 default is unbounded. The bound is per scanner: a scanner over a shared cursor gets
 it from `NewWithCursorOptions`, and the cursor's own retention budget
-(`textreader.WithMaxRetained`) is shared by every scanner on that cursor.
+(`cursor.WithMaxRetained`) is shared by every scanner on that cursor.
 
 `scanner.Context(tok, before, after)` returns the source text around a token,
 including the input that precedes it. The scanner keeps a window of the most
@@ -428,7 +452,8 @@ recent tokens retained, so the context stays available while `tok` is inside
 that window, and `before` is clamped to it. A `Next` that commits nothing — one
 that fails, or the final EOF probe — releases nothing. Once later tokens push
 `tok` out of the window, its retained input is released and calls return
-`textreader.ErrPositionOutOfBuffer`.
+`cursor.ErrPositionOutOfBuffer`. On a byte-mode cursor, such as the one of
+`bytesource.NewCursor`, the context holds the raw input bytes.
 
 The retained window is backed by a fixed pool of checkpoint slots (the window
 width plus the in-flight token). When the cursor supports checkpoint re-arming,
@@ -436,7 +461,7 @@ a committed token's slot is released and the next token re-arms that same slot
 in place, so the number of live checkpoints is bounded by the window and no
 checkpoint is allocated once the pool is full. `NewWithCursor` accepts any
 cursor that implements the four-method `Cursor` interface; a cursor that also
-exposes `Remark` (as `textreader.NewReader` does) opts into the reuse path,
+exposes `Remark` (as `cursor.Reader` does) opts into the reuse path,
 while a cursor without it falls back to allocating a fresh checkpoint per
 token.
 

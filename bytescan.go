@@ -21,7 +21,7 @@
 // evaluation, maximal-munch selection, registration-order tie breaking, the
 // UNKNOWN fallback, and token construction. It owns no stream mechanics.
 // Reading, buffering, positions, and replay come from a positioned cursor
-// (github.com/xiam/textreader): the cursor decodes UTF-8, or reads bytes
+// (github.com/xiam/bytescan/cursor): the cursor decodes UTF-8, or reads bytes
 // through bytesource.NewCursor, tracks the logical position, retains the
 // input a checkpoint needs, and restores a marked position exactly.
 //
@@ -38,7 +38,7 @@
 //
 // The scanner keeps a fixed pool of checkpoint slots — one per token the context
 // window retains, plus the in-flight token. When the cursor can re-arm a
-// released checkpoint (the Remark capability of textreader's TextReader), a
+// released checkpoint (the Remark capability of cursor.Reader), a
 // committed token's slot is re-armed in place for the next token, so
 // steady-state tokenization allocates no checkpoint. A cursor that cannot
 // re-arm one (see NewWithCursor) falls back to allocating a checkpoint per
@@ -58,7 +58,7 @@
 // WithMaxTokenBytes, passed to NewWithOptions or, for a scanner over a shared
 // cursor, to NewWithCursorOptions, is the only hard bound. It is fail-stop: a
 // token that would exceed it makes Next return an error wrapping
-// textreader.ErrRetentionExceeded, and the scanner makes no progress past that
+// cursor.ErrRetentionExceeded, and the scanner makes no progress past that
 // token. There is no default bound.
 //
 // A rule whose read-ahead can be rejected (base.Quoted, base.QuotedMultiline,
@@ -74,7 +74,7 @@ import (
 	"io"
 	"sync"
 
-	"github.com/xiam/textreader"
+	"github.com/xiam/bytescan/cursor"
 )
 
 const (
@@ -83,17 +83,17 @@ const (
 )
 
 // Cursor is the stream surface the scanner needs from a positioned cursor.
-// *textreader.TextReader implements it. The interface is exported so a caller
+// *cursor.Reader implements it. The interface is exported so a caller
 // can supply its own cursor and so the scanner's dependency on the cursor stays
 // explicit.
 type Cursor interface {
 	// ReadLocatedRune reads the next rune and reports the position it started
 	// at.
-	ReadLocatedRune() (textreader.LocatedRune, error)
+	ReadLocatedRune() (cursor.LocatedRune, error)
 	// Cursor returns the logical position of the next read.
-	Cursor() textreader.Pos
+	Cursor() cursor.Pos
 	// Checkpoint marks the current logical position for replay.
-	Checkpoint() *textreader.Checkpoint
+	Checkpoint() *cursor.Checkpoint
 	// Seek moves the logical cursor inside the retained input.
 	Seek(offset int64, whence int) (int64, error)
 }
@@ -102,7 +102,7 @@ type Cursor interface {
 // retain. It backs Scanner.Context and is optional: everything else works with a
 // plain Cursor.
 type contextualCursor interface {
-	Context(s textreader.Span, before, after int) (string, error)
+	Context(s cursor.Span, before, after int) (string, error)
 }
 
 // remarkableCursor is implemented by cursors that can re-arm a released
@@ -113,7 +113,7 @@ type contextualCursor interface {
 // tokens. It is optional, following contextualCursor: a cursor without it
 // keeps the existing allocating behavior.
 type remarkableCursor interface {
-	Remark(*textreader.Checkpoint) error
+	Remark(*cursor.Checkpoint) error
 }
 
 // Option configures a scanner created by NewWithOptions or NewWithCursorOptions.
@@ -129,12 +129,12 @@ type config struct {
 // The bound covers maximal-munch look-ahead: a rule that keeps matching forces
 // the scanner to retain everything it has read for the token so far. When a token
 // would exceed the bound, Next returns an error wrapping
-// textreader.ErrRetentionExceeded, and the scanner makes no partial progress.
+// cursor.ErrRetentionExceeded, and the scanner makes no partial progress.
 //
 // The bound is per scanner. NewWithOptions also sizes the retention budget of
 // the cursor it builds, so that every token within the bound fits. A scanner
 // created by NewWithCursorOptions does not change the cursor: the cursor's
-// retention budget (textreader.WithMaxRetained) is set by the caller and is
+// retention budget (cursor.WithMaxRetained) is set by the caller and is
 // shared by every scanner on that cursor.
 func WithMaxTokenBytes(n int) Option {
 	return func(c *config) {
@@ -173,7 +173,7 @@ type Scanner struct {
 	// the token currently being assembled is armed there. A mark is released
 	// only when a later token commits and evicts its slot, so a failed Next or
 	// an EOF probe leaves the previous token's context readable.
-	marks     [markSlots]*textreader.Checkpoint
+	marks     [markSlots]*cursor.Checkpoint
 	marksNext int
 
 	// canRemark reports whether the cursor can re-arm a released checkpoint in
@@ -226,9 +226,9 @@ func NewWithOptions(rr io.RuneReader, opts ...Option) *Scanner {
 
 	var cur Cursor
 	if r, ok := rr.(io.Reader); ok {
-		cur = textreader.NewReader(r, textreader.WithMaxRetained(retained))
+		cur = cursor.NewReader(r, cursor.WithMaxRetained(retained))
 	} else {
-		cur = textreader.NewRuneReader(rr, textreader.WithMaxRetained(retained))
+		cur = cursor.NewRuneReader(rr, cursor.WithMaxRetained(retained))
 	}
 
 	return newWithCursorConfig(cur, cfg)
@@ -239,7 +239,7 @@ func NewWithOptions(rr io.RuneReader, opts ...Option) *Scanner {
 // one scanner per mode, or to configure the cursor's retention policy directly.
 //
 // The scanner has no per-token byte bound; use NewWithCursorOptions to set one.
-// The cursor's retention budget (textreader.WithMaxRetained) is shared by
+// The cursor's retention budget (cursor.WithMaxRetained) is shared by
 // every scanner on the cursor.
 func NewWithCursor(c Cursor) *Scanner {
 	return newWithCursorConfig(c, &config{})
@@ -251,9 +251,9 @@ func NewWithCursor(c Cursor) *Scanner {
 // WithMaxTokenBytes bounds each token of this scanner, with the same semantics
 // as in NewWithOptions. The bound is per scanner, so several scanners on one
 // cursor can each have their own. The scanner does not change the cursor: the
-// cursor's retention budget (textreader.WithMaxRetained) is set by the caller
+// cursor's retention budget (cursor.WithMaxRetained) is set by the caller
 // and is shared by every scanner on the cursor. A budget smaller than the
-// scanner's needs makes Next fail with textreader.ErrRetentionExceeded before
+// scanner's needs makes Next fail with cursor.ErrRetentionExceeded before
 // the per-token bound is reached.
 func NewWithCursorOptions(c Cursor, opts ...Option) *Scanner {
 	return newWithCursorConfig(c, newConfig(opts))
@@ -333,9 +333,9 @@ func (sc *Scanner) MustAddRule(lexType TokenType, lexRule Rule) {
 // Any other error leaves the input where it was: a failed call consumes
 // nothing, and a retry starts the same token over. Such an error matches
 // ErrNoRules when no rule is registered, ErrTokenTooLarge together with
-// textreader.ErrRetentionExceeded when a token would exceed WithMaxTokenBytes,
+// cursor.ErrRetentionExceeded when a token would exceed WithMaxTokenBytes,
 // or ErrInternal when an engine invariant breaks. An error from the reader or
-// the cursor, such as a cursor's own textreader.ErrRetentionExceeded, is
+// the cursor, such as a cursor's own cursor.ErrRetentionExceeded, is
 // wrapped so that errors.Is matches it.
 //
 // This method is safe for concurrent use by multiple goroutines.
@@ -355,7 +355,10 @@ func (sc *Scanner) Next() (*Token, error) {
 // A token is released once enough later tokens have committed to push it out
 // of the window, and a call that commits nothing — a failed Next, or the EOF
 // probe — releases nothing. Once tok is no longer retained, Context returns
-// textreader.ErrPositionOutOfBuffer, unchanged.
+// cursor.ErrPositionOutOfBuffer, unchanged.
+//
+// On a byte-mode cursor, such as one from bytesource.NewCursor, the result
+// holds the raw input bytes, not the runes of Token.Text.
 //
 // A nil tok returns ErrNilToken, and a cursor that does not expose retained
 // text returns ErrContextUnsupported. Any other error from the cursor is
@@ -383,8 +386,8 @@ func (sc *Scanner) Context(tok *Token, before, after int) (string, error) {
 // Call it before handing a shared cursor to another consumer: while the scanner
 // holds checkpoints, a cursor configured with a finite retention budget keeps
 // that input reserved, and the other consumer sees
-// textreader.ErrRetentionExceeded sooner than it expects. After Release,
-// Context returns textreader.ErrPositionOutOfBuffer until the next token
+// cursor.ErrRetentionExceeded sooner than it expects. After Release,
+// Context returns cursor.ErrPositionOutOfBuffer until the next token
 // commits. Release cannot fail, and Next works as before after it.
 //
 // Release keeps the released checkpoint values in their slots, so a cursor
@@ -455,7 +458,7 @@ func (sc *Scanner) readSymbol() (sym Symbol, isEOF bool, err error) {
 // symbolFlags derives a symbol's positional flags from the position it was read
 // at. BOF is the start of the stream, BOL is rune column zero, and EOL is a
 // newline; EOF is supplied by the caller.
-func symbolFlags(at textreader.Pos, r rune, eof bool) uint {
+func symbolFlags(at cursor.Pos, r rune, eof bool) uint {
 	flags := uint(FlagNone)
 
 	if at.IsStart() {
@@ -488,7 +491,7 @@ func symbolFlags(at textreader.Pos, r rune, eof bool) uint {
 // (an active value, which the invariant above rules out) falls back to a fresh
 // Checkpoint and replaces the slot's stale value, so the token still arms a
 // valid mark.
-func (sc *Scanner) remarkSlot(idx int) *textreader.Checkpoint {
+func (sc *Scanner) remarkSlot(idx int) *cursor.Checkpoint {
 	if sc.canRemark {
 		if c := sc.marks[idx]; c != nil {
 			if err := sc.cursor.(remarkableCursor).Remark(c); err == nil {
@@ -536,7 +539,7 @@ func (sc *Scanner) nextToken() (*Token, error) {
 			tokenBytes += sym.Size()
 
 			if sc.maxTokenBytes > 0 && tokenBytes > sc.maxTokenBytes {
-				return abandon(fmt.Errorf("%w: token exceeds %d bytes: %w", ErrTokenTooLarge, sc.maxTokenBytes, textreader.ErrRetentionExceeded))
+				return abandon(fmt.Errorf("%w: token exceeds %d bytes: %w", ErrTokenTooLarge, sc.maxTokenBytes, cursor.ErrRetentionExceeded))
 			}
 		}
 
@@ -628,7 +631,7 @@ func (sc *Scanner) nextToken() (*Token, error) {
 			end = sc.cursor.Cursor()
 		}
 
-		span := textreader.NewSpan(start, end)
+		span := cursor.NewSpan(start, end)
 
 		// The token is committed: its in-flight slot now holds a committed mark
 		// (remarkSlot stored or re-armed it there), and the oldest committed

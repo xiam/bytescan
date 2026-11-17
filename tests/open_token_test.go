@@ -10,8 +10,8 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	"github.com/xiam/bytescan"
+	"github.com/xiam/bytescan/cursor"
 	"github.com/xiam/bytescan/rules/base"
-	"github.com/xiam/textreader"
 )
 
 // The tests in this file cover the one symbol stack: nextToken keeps
@@ -147,23 +147,23 @@ func TestOneStackUnknownAtEOF(t *testing.T) {
 	}
 }
 
-// transientCursor is a textreader cursor whose read at byte offset failAt
+// transientCursor is a cursor.Reader whose read at byte offset failAt
 // fails once. The read does not move the cursor, so the next read returns the
 // rune at failAt. Embedding keeps the Context and Remark capabilities.
 type transientCursor struct {
-	*textreader.TextReader
+	*cursor.Reader
 	failAt int
 	failed bool
 }
 
 var errTransient = errors.New("transient read error")
 
-func (tc *transientCursor) ReadLocatedRune() (textreader.LocatedRune, error) {
+func (tc *transientCursor) ReadLocatedRune() (cursor.LocatedRune, error) {
 	if !tc.failed && tc.Cursor().ByteOffset() == tc.failAt {
 		tc.failed = true
-		return textreader.LocatedRune{}, errTransient
+		return cursor.LocatedRune{}, errTransient
 	}
-	return tc.TextReader.ReadLocatedRune()
+	return tc.Reader.ReadLocatedRune()
 }
 
 // TestOneStackFailedNextThenRetry: a Next that fails in the middle of a token
@@ -175,8 +175,8 @@ func TestOneStackFailedNextThenRetry(t *testing.T) {
 
 	newScanner := func(failAt int) *bytescan.Scanner {
 		lx := bytescan.NewWithCursor(&transientCursor{
-			TextReader: textreader.NewReader(strings.NewReader(input)),
-			failAt:     failAt,
+			Reader: cursor.NewReader(strings.NewReader(input)),
+			failAt: failAt,
 		})
 		lx.MustAddRule(lexTypeWord, newASCIILettersRule())
 		lx.MustAddRule(lexTypeSpace, newSpaceRule())

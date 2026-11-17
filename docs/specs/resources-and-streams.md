@@ -26,7 +26,7 @@ bound **includes** look-ahead: a rule that keeps matching forces the engine to
 retain everything it has read for the token so far, and the counter advances with
 every speculatively read symbol. A token that would exceed the bound makes `Next`
 return an error matching `ErrTokenTooLarge` and wrapping
-`textreader.ErrRetentionExceeded`, with no partial progress (the cursor is
+`cursor.ErrRetentionExceeded`, with no partial progress (the cursor is
 rewound; see
 [Returned-error rollback](rule-vm-contract.md#returned-error-rollback)). The
 default is unbounded. When the bound is set, the cursor's retention budget is
@@ -47,7 +47,7 @@ options as `NewWithOptions`; with `WithMaxTokenBytes(n)` it enforces the bound
 with the same semantics (the same error, look-ahead counted, no partial
 progress). The bound is **per scanner**: several scanners on one cursor can each
 have their own. The scanner does not change the cursor. The cursor's retention
-budget (`textreader.WithMaxRetained`) is set by the caller and is **shared** by
+budget (`cursor.WithMaxRetained`) is set by the caller and is **shared** by
 every scanner on the cursor, including the context-window checkpoints of a scanner
 that has not called `Release`. A budget too small for a token makes `Next` fail
 with `ErrRetentionExceeded` from the cursor before the per-token bound is
@@ -104,14 +104,14 @@ semantics, not from the construction.
   input: a token whose longer branch dies early reads only that far.
 - **Byte bound.** With `WithMaxTokenBytes(n)` the read-ahead counts toward the
   bound. The token fails with an error wrapping
-  `textreader.ErrRetentionExceeded` when the read-ahead exceeds `n` bytes, even
+  `cursor.ErrRetentionExceeded` when the read-ahead exceeds `n` bytes, even
   when the final match is short. The failed `Next` consumes nothing, so a retry
   fails the same way.
 
 **Evidence.** `TestLookaheadUnboundedReadAheadHitsByteBound` (`ab(?=c)|ab.*z`
 under `WithMaxTokenBytes(64)` on 65 bytes that start with `abc`: two calls to
 `Next` each return no token and an error wrapping
-`textreader.ErrRetentionExceeded`; on 64 bytes, and on the 65 bytes with the
+`cursor.ErrRetentionExceeded`; on 64 bytes, and on the 65 bytes with the
 default unbounded scanner, the first token is `MATCH "ab"`).
 
 **Recorded measurement, not a contract.** Under `ab(?=c)|ab.*z` on repeated

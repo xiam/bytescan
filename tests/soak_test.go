@@ -13,10 +13,10 @@ import (
 
 	"github.com/xiam/bytescan"
 	"github.com/xiam/bytescan/bytesource"
+	"github.com/xiam/bytescan/cursor"
 	"github.com/xiam/bytescan/rules/base"
 	"github.com/xiam/bytescan/rules/core"
 	"github.com/xiam/bytescan/rules/special"
-	"github.com/xiam/textreader"
 )
 
 // The soak test proves that the engine stays flat over a stream of
@@ -167,7 +167,7 @@ type soakWorkload struct {
 	active func() (*bytescan.Scanner, *soakWindow)
 	// release calls Release on every scanner of the driver.
 	release func()
-	cursor  *textreader.TextReader
+	cursor  *cursor.Reader
 	// allocBudget is the budget in allocations per token.
 	allocBudget float64
 }
@@ -361,7 +361,7 @@ func runSoak(t *testing.T, build func() *soakWorkload, limits soakLimits, stopOn
 		fail(soakCheckRelease, "after Release the cursor retains %d bytes, want 0", got)
 	}
 	if lx != nil && win.n > 0 {
-		if _, err := lx.Context(win.lex[win.n-1], 0, 0); !errors.Is(err, textreader.ErrPositionOutOfBuffer) {
+		if _, err := lx.Context(win.lex[win.n-1], 0, 0); !errors.Is(err, cursor.ErrPositionOutOfBuffer) {
 			fail(soakCheckRelease, "after Release, Context of the last token returns %v, want ErrPositionOutOfBuffer", err)
 		}
 	}
@@ -396,7 +396,7 @@ func soakCheckActiveWindow(w *soakWorkload, fail func(soakCheck, string, ...any)
 		fail(soakCheckWindow, "Context of the last token reaches %q (%v), want the window %q", got, err, want.String())
 	}
 	if first > 0 {
-		if _, err := lx.Context(win.lex[first-1], 0, 0); !errors.Is(err, textreader.ErrPositionOutOfBuffer) {
+		if _, err := lx.Context(win.lex[first-1], 0, 0); !errors.Is(err, cursor.ErrPositionOutOfBuffer) {
 			fail(soakCheckWindow, "Context of the token before the window returns %v, want ErrPositionOutOfBuffer", err)
 		}
 	}
@@ -483,7 +483,7 @@ func TestSoakMixedTiers(t *testing.T) {
 }
 
 func newSoakMixedTiers() *soakWorkload {
-	cur := textreader.NewReader(newSoakFragmentSource(59, soakMixedFragments, soakMixedSeps))
+	cur := cursor.NewReader(newSoakFragmentSource(59, soakMixedFragments, soakMixedSeps))
 	lx := bytescan.NewWithCursor(cur)
 	lx.MustAddRule("URL", special.URL())
 	lx.MustAddRule("EMAIL", special.Email())
@@ -535,7 +535,7 @@ const (
 )
 
 func newSoakModeDriver() *soakWorkload {
-	cur := textreader.NewReader(newSoakFragmentSource(60, soakModeFragments, soakModeSeps))
+	cur := cursor.NewReader(newSoakFragmentSource(60, soakModeFragments, soakModeSeps))
 
 	code := bytescan.NewWithCursor(cur)
 	code.MustAddRule("IDENT", base.ASCIIIdentifier())

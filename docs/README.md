@@ -86,8 +86,8 @@ A substantive promise with no status is a documentation bug — flag it.
   `bytesource` and `streamtest`.
 - **Upstream cursor.** Stream mechanics (reading, buffering, positions,
   checkpoints, replay) come from
-  [`github.com/xiam/textreader`](https://github.com/xiam/textreader), which
-  reads text, or bytes through [`bytesource`](../bytesource); the scanner owns
+  [`github.com/xiam/bytescan/cursor`](../cursor), which reads text, or bytes
+  through [`bytesource`](../bytesource); the scanner owns
   no stream mechanics.
 
 Keep the README and the core contract as paired documentation: when one changes,

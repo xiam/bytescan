@@ -16,7 +16,7 @@ const (
 	// newlineStreamLines is the input size of TestNewlineStreamLiveHeap, in
 	// lines of one "\n" each: 256 Ki lines, or 128 Ki lines under the race
 	// detector, which lexes several times slower. Both are well above the
-	// 64 Ki lines that fill one textreader buffer, so the limit below tells
+	// 64 Ki lines that fill one cursor buffer, so the limit below tells
 	// a bounded table from a growing one.
 	newlineStreamLines     = 256 << 10
 	newlineStreamLinesRace = 128 << 10
@@ -41,8 +41,8 @@ const (
 	newlineStreamHeapLimit = 256 << 20
 )
 
-// TestNewlineStreamLiveHeap covers the per-line table of textreader
-// (trimmed in textreader v0.4.0): a stream of newlines must not grow the
+// TestNewlineStreamLiveHeap covers the per-line table of the cursor
+// (trimmed in textreader v0.4.0, now bytescan/cursor): a stream of newlines must not grow the
 // scanner's live heap with the number of lines. The test lexes every line with
 // base.Newline, then collects garbage and reads the live heap above a baseline
 // taken after garbage collection, before the first Next. It measures before

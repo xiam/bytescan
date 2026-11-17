@@ -10,9 +10,9 @@ import (
 	"github.com/stretchr/testify/require"
 
 	"github.com/xiam/bytescan"
+	"github.com/xiam/bytescan/cursor"
 	"github.com/xiam/bytescan/modes"
 	"github.com/xiam/bytescan/rules/core"
-	"github.com/xiam/textreader"
 )
 
 // newWordSpace returns a word scanner and a space scanner over cur.
@@ -50,7 +50,7 @@ func drain(t *testing.T, src bytescan.Source) []string {
 }
 
 func TestDriverSwitch(t *testing.T) {
-	cur := textreader.New(strings.NewReader("ab cd ef"))
+	cur := cursor.New(strings.NewReader("ab cd ef"))
 	words, spaces := newWordSpace(cur)
 	d := modes.New(cur, words, modes.WithSwitch(alternate(words, spaces)))
 
@@ -67,7 +67,7 @@ func TestDriverSwitch(t *testing.T) {
 }
 
 func TestDriverWithoutSwitch(t *testing.T) {
-	cur := textreader.New(strings.NewReader("ab cd"))
+	cur := cursor.New(strings.NewReader("ab cd"))
 	words, spaces := newWordSpace(cur)
 	d := modes.New(cur, words)
 
@@ -91,7 +91,7 @@ func TestDriverWithoutSwitch(t *testing.T) {
 // the cursor retains no input after it, and that Use of the active scanner does
 // not release it.
 func TestDriverUseReleases(t *testing.T) {
-	cur := textreader.New(strings.NewReader("ab cd ef gh"))
+	cur := cursor.New(strings.NewReader("ab cd ef gh"))
 	words, spaces := newWordSpace(cur)
 	d := modes.New(cur, words)
 
@@ -120,7 +120,7 @@ func TestDriverUseReleases(t *testing.T) {
 func TestDriverSwitchAllocs(t *testing.T) {
 	input := strings.Repeat("abc ", 4096)
 
-	cur := textreader.New(strings.NewReader(input))
+	cur := cursor.New(strings.NewReader(input))
 	words, spaces := newWordSpace(cur)
 	d := modes.New(cur, words, modes.WithSwitch(alternate(words, spaces)))
 	for i := 0; i < 16; i++ {
@@ -142,7 +142,7 @@ func TestDriverSwitchAllocs(t *testing.T) {
 		}
 	})
 
-	cur2 := textreader.New(strings.NewReader(input))
+	cur2 := cursor.New(strings.NewReader(input))
 	words2, spaces2 := newWordSpace(cur2)
 	for i := 0; i < 8; i++ {
 		for _, lx := range []*bytescan.Scanner{words2, spaces2} {
@@ -168,7 +168,7 @@ func TestDriverSwitchAllocs(t *testing.T) {
 // is read exactly once, so the lengths of the texts add up to the input.
 func TestDriverConcurrentNext(t *testing.T) {
 	input := strings.Repeat("ab cd ", 500)
-	cur := textreader.New(strings.NewReader(input))
+	cur := cursor.New(strings.NewReader(input))
 	words, spaces := newWordSpace(cur)
 	d := modes.New(cur, words, modes.WithSwitch(alternate(words, spaces)))
 
@@ -207,7 +207,7 @@ func TestDriverConcurrentNext(t *testing.T) {
 }
 
 func TestDriverNilScanner(t *testing.T) {
-	cur := textreader.New(strings.NewReader(""))
+	cur := cursor.New(strings.NewReader(""))
 	words, _ := newWordSpace(cur)
 	assert.Panics(t, func() { modes.New(cur, nil) })
 	d := modes.New(cur, words)
@@ -215,7 +215,7 @@ func TestDriverNilScanner(t *testing.T) {
 }
 
 func TestCache(t *testing.T) {
-	cur := textreader.New(strings.NewReader(""))
+	cur := cursor.New(strings.NewReader(""))
 	builds := 0
 	c := modes.NewCache(cur, func(got bytescan.Cursor, key int) *bytescan.Scanner {
 		assert.Same(t, cur, got)

@@ -24,11 +24,15 @@ type Source interface {
 type GeneratorOption func(*Generator)
 
 // WithBudget sets the byte budget of a generator. Zero or less keeps
-// DefaultBudget.
+// DefaultBudget. A budget set here is explicit even when it equals
+// DefaultBudget: under the race detector, Run then keeps the DefaultCeiling
+// of the budget and the first-interval baseline (see the package
+// documentation).
 func WithBudget(n int64) GeneratorOption {
 	return func(g *Generator) {
 		if n > 0 {
 			g.budget = n
+			g.explicitBudget = true
 		}
 	}
 }
@@ -45,6 +49,8 @@ type Generator struct {
 	budget  int64
 	written int64 // bytes of the records generated so far
 	records int   // records generated so far
+
+	explicitBudget bool // WithBudget set the budget
 
 	buf []byte // the current record
 	off int    // read offset in buf
@@ -67,6 +73,12 @@ func NewGenerator(seed int64, record RecordFunc, opts ...GeneratorOption) *Gener
 // Budget returns the byte budget of the stream.
 func (g *Generator) Budget() int64 {
 	return g.budget
+}
+
+// usesDefaultBudget reports whether the budget is the default budget of a run
+// without -streamtest.long because no WithBudget set one.
+func (g *Generator) usesDefaultBudget() bool {
+	return !g.explicitBudget && g.budget == defaultBudget
 }
 
 // Records returns how many records the generator has produced so far.
@@ -184,6 +196,11 @@ func Corrupt(gen *Generator, seed int64, rate float64, garbage GarbageFunc) *Cor
 // Budget returns the byte budget of the generator.
 func (c *Corrupter) Budget() int64 {
 	return c.gen.Budget()
+}
+
+// usesDefaultBudget reports whether the generator uses the default budget.
+func (c *Corrupter) usesDefaultBudget() bool {
+	return c.gen.usesDefaultBudget()
 }
 
 // Injected returns how many garbage runs the Corrupter has inserted so far.

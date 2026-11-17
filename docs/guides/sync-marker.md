@@ -63,9 +63,9 @@ not 0x47. The one at offset 3 is.
 ## Traps
 
 - **The look-ahead reads a whole packet.** The confirmed sync of a 188-byte
-  packet reads 189 bytes. Set the token guard above that: twice
-  `streamtest.ByteGuard` covers it, because the guard counts a byte of 0x80 or
-  above as two bytes.
+  packet reads 189 bytes. Set the token guard above that:
+  `streamtest.ByteGuard` covers it, because the guard of a
+  `bytesource.NewCursor` cursor counts one for each byte.
 - **A 0x47 that the input ends before confirming is `UNKNOWN`.** Near the end
   of a stream, the last packet start cannot be confirmed by the lost scanner. In
   sync, the sync scanner does not need to confirm, so a clean stream lexes to

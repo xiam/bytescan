@@ -102,7 +102,7 @@ rule's own state is the `Rule` value it returns.
   - `Scanner.processor`: a cache of the processor, dropped by `AddRule` and
     rebuilt by `getProcessor`; its per-token contents are reset as described
     above.
-  - `Scanner.cursor`: the stream position, owned by `textreader`.
+  - `Scanner.cursor`: the stream position, owned by `bytescan/cursor`.
   - `Scanner.marks` and `Scanner.marksNext`: the context-window ring of
     checkpoints for committed tokens. They mark source positions for
     `Context`, not rule state. The context window is not a deviation.
@@ -243,10 +243,13 @@ meaningful.
 
 ### Owner decisions
 
-- **2026-11-16 — the byte-exact cursor.** Option A: a byte mode in
-  `textreader`, then a switch of `bytesource` to it.
-  Until then the byte-stream limit under
-  [Byte reads](layers.md#byte-reads-bytesource) holds.
+- **2026-11-17 — the cursor moves into bytescan.** The cursor of
+  `github.com/xiam/textreader` becomes the package `github.com/xiam/bytescan/cursor`
+  (type `cursor.Reader`, was `TextReader`), which imports only the standard
+  library. bytescan uses it instead of textreader from v0.4.0.
+- **2026-11-16 — the byte-exact cursor.** Option A: a byte mode in the cursor,
+  then a switch of `bytesource` to it. Done: `bytesource.NewCursor` returns
+  `cursor.NewByteReader`; see [Byte reads](layers.md#byte-reads-bytesource).
 - **2026-11-16 — positioning.** The project reads streams of data and
   classifies what it finds, for text and binary data alike; parsing is out of
   scope. See [Purpose and scope](core-contract.md#purpose-and-scope).
