@@ -1,4 +1,4 @@
-package textlexer
+package bytescan
 
 import (
 	"fmt"
@@ -12,20 +12,20 @@ type ruleState struct {
 }
 
 // rulesProcessor processes input symbols through multiple rules and returns the
-// best match based on the "maximal munch" principle (longest accepted lexeme).
+// best match based on the "maximal munch" principle (longest accepted token).
 type rulesProcessor struct {
-	rules []LexemeType
+	rules []TokenType
 
-	states map[LexemeType]*ruleState
+	states map[TokenType]*ruleState
 	buf    []Symbol
 }
 
-func newRulesProcessor(rules []LexemeType, initialStates map[LexemeType]Rule) *rulesProcessor {
+func newRulesProcessor(rules []TokenType, initialStates map[TokenType]Rule) *rulesProcessor {
 	if len(rules) != len(initialStates) {
 		panic("rules and initialStates length mismatch")
 	}
 
-	states := map[LexemeType]*ruleState{}
+	states := map[TokenType]*ruleState{}
 	for _, typ := range rules {
 		if initialStates[typ] == nil {
 			panic(fmt.Sprintf("scanner for rule %q is nil", typ))
@@ -54,24 +54,24 @@ func (rp *rulesProcessor) Reset() {
 	}
 }
 
-func (rp *rulesProcessor) Process(s Symbol) (LexemeType, int) {
-	// Process the symbol through all active scanners
-	activeScanners := rp.processSymbol(s)
+func (rp *rulesProcessor) Process(s Symbol) (TokenType, int) {
+	// Process the symbol through all active rules
+	activeRules := rp.processSymbol(s)
 
-	// If any scanners are still active, we need more input
-	if activeScanners > 0 {
-		return LexemeTypeUnknown, -1
+	// If any rules are still active, we need more input
+	if activeRules > 0 {
+		return TokenTypeUnknown, -1
 	}
 
-	// All scanners are done; pick the best match
+	// All rules are done; pick the best match
 	bestMatch, bestMatchLen := rp.pickBestMatch()
 
 	// If no match was found, return UNKNOWN with length 1 to consume at least
-	if bestMatch == LexemeTypeUnknown {
-		return LexemeTypeUnknown, 1
+	if bestMatch == TokenTypeUnknown {
+		return TokenTypeUnknown, 1
 	}
 
-	// Remove the matched symbols from the buffer
+	// The stack keeps its symbols: the caller reads the match from Symbols.
 	return bestMatch, bestMatchLen
 }
 
@@ -83,7 +83,7 @@ func (rp *rulesProcessor) Process(s Symbol) (LexemeType, int) {
 //
 //   - A State outside the four constants, returned directly or at the end of a
 //     pushback chain, retires the rule as StateReject does.
-//   - s is the synthetic EOF symbol when it carries FlagEOF; only nextLexeme's
+//   - s is the synthetic EOF symbol when it carries FlagEOF; only nextToken's
 //     end-of-input symbol does. An accept that counts it (an accept with no
 //     pushback) is longer than the symbols read, so the VM discards it. An
 //     accept whose pushback chain excludes it is recorded as usual.
@@ -95,7 +95,7 @@ func (rp *rulesProcessor) processSymbol(s Symbol) int {
 	rp.buf = append(rp.buf, s)
 	atEOF := s.IsEOF()
 
-	activeScanners := 0
+	activeRules := 0
 	for _, typ := range rp.rules {
 		var pushbackCount int
 
@@ -136,17 +136,17 @@ func (rp *rulesProcessor) processSymbol(s Symbol) int {
 
 		if keepActive && !atEOF {
 			state.rule = nextRule
-			activeScanners++
+			activeRules++
 		} else {
 			state.isActive = false
 		}
 	}
 
-	return activeScanners
+	return activeRules
 }
 
-func (rp *rulesProcessor) pickBestMatch() (LexemeType, int) {
-	bestMatch := LexemeTypeUnknown
+func (rp *rulesProcessor) pickBestMatch() (TokenType, int) {
+	bestMatch := TokenTypeUnknown
 	bestMatchLen := -1
 
 	for _, typ := range rp.rules {
@@ -162,9 +162,9 @@ func (rp *rulesProcessor) pickBestMatch() (LexemeType, int) {
 
 // callRule calls r with s and returns its verdict. If r does not return
 // normally, callRule recovers the panic and returns (nil, StateReject), so the
-// VM retires that rule for the current token as for a reject (principle 3,
-// KD-2 in docs/specs/core-contract.md). The VM neither keeps nor reports the
-// panic value.
+// VM retires that rule for the current token as for a reject (principle 3;
+// "Panics" in docs/specs/rule-vm-contract.md). The VM neither keeps nor
+// reports the panic value.
 //
 // The completion flag, not the result of recover, detects the panic: with
 // GODEBUG panicnil=1 (a main module that declares a go version before 1.21),
@@ -182,4 +182,11 @@ func callRule(r Rule, s Symbol) (next Rule, state State) {
 	next, state = r(s)
 	returned = true
 	return next, state
+}
+
+// Symbols returns the token's stack: every symbol passed to Process since the
+// last Reset, in order, the synthetic EOF symbol included once it is passed.
+// The slice aliases the stack, so it is valid only until the next Reset.
+func (rp *rulesProcessor) Symbols() []Symbol {
+	return rp.buf
 }

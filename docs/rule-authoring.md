@@ -1,9 +1,9 @@
 # Rule-authoring standard
 
-This document says how to write a `textlexer` rule and how to check one. It is
-**normative for every rule in this repository**: the test rules, the shared
-rule helpers, and the runnable example. Consumers can use it as guidance for
-their own rules.
+This document says how to write a `bytescan` rule and how to check one. It is
+**normative for every rule in this repository**: the rules of the `rules/`
+packages, the test rules, and the runnable examples. Consumers can use it as
+guidance for their own rules.
 
 The [core contract](specs/core-contract.md) states what the VM does with each
 verdict a rule returns. This document does not change that contract. It states
@@ -12,20 +12,39 @@ that every rule reads the same way and gets its intended match.
 
 - **Enforcement.** Review against the [reviewer checklist](#reviewer-checklist)
   at the end of this document. No automated checker exists yet.
-- **Line ends.** `\r\n` handling is out of scope. It is an open design question
-  in the core contract.
+- **Line ends.** A rule does not decide where a line ends. The cursor's
+  positions after `\r\n` and after a lone `\r` are current contract in the
+  core contract ("after `\r\n`"), and `base.Newline` matches `\r\n` as one
+  token. Whether the toolkit should promise that convention independently of
+  the cursor is an open design question there.
+- **Bytes.** A rule for binary data follows this standard too. See
+  [Rules over bytes](#rules-over-bytes) for the points that differ.
 - **Engine probes.** A rule that misbehaves on purpose to test the VM is exempt.
   See [Exempt engine probes](#exempt-engine-probes).
 
-The examples use the shared helpers that `textlexer_test.go` defines:
-`excludeLast`, `newLiteralRule`, `newLiteralThenRule`, `newRunePlusRule`, and
-the predicates `isASCIIDigit`, `isASCIILetter` and `isASCIIWhitespace`.
+The examples use the names of [`rules/core`](../rules/core): `core.PushBack`
+builds every pushback chain, and the classes `core.ASCIIDigit`,
+`core.ASCIILetter` and `core.ASCIIWord` are named character classes. Package
+`core` also has the rules that several examples write by hand, for example
+`core.Literal` and `core.Keyword`; the examples write them out to show the
+practices.
+
+**Tiers.** The hand-written state functions of the [rule tiers](rules.md) are
+in `rules/core`, and they follow this standard directly. Every rule of
+`rules/base`, `rules/special` and `rules/octet` is composed from core rules
+and contains no hand-written state function. It follows this standard through
+core: it gets
+the named states, the end-of-input behaviour and the single pushback chain of
+the core rules it is composed from. Practices 7 to 9 apply to it directly: its
+constructor comment gives its regular expression or grammar and its behaviour
+at end of input, and it has its own tests. A consumer rule composed from core
+rules follows the standard in the same way.
 
 ## Terms
 
-- **Rule value.** A value of type `textlexer.Rule`, the function
-  `func(s textlexer.Symbol) (next textlexer.Rule, state textlexer.State)`.
-- **Constructor.** A function `newXxxRule(...) textlexer.Rule` that returns the
+- **Rule value.** A value of type `bytescan.Rule`, the function
+  `func(s bytescan.Symbol) (next bytescan.Rule, state bytescan.State)`.
+- **Constructor.** A function `newXxxRule(...) bytescan.Rule` that returns the
   start state of a rule.
 - **State.** One rule value that a rule returns as `next`. A state is either a
   scanning state or a pushback-chain callback.
@@ -34,7 +53,7 @@ the predicates `isASCIIDigit`, `isASCIILetter` and `isASCIIWhitespace`.
   control to. The VM calls it, in the same step, with the symbol that the
   pushback just excluded.
 - **Delegating return.** A `return` statement that returns the result of a
-  helper call, for example `return excludeLast(1, textlexer.StateAccept)`.
+  helper call, for example `return core.PushBack(1, bytescan.StateAccept)`.
 - **The EOF symbol.** The synthetic symbol that the VM shows every active rule
   at end of input. It carries `RuneEOF` and `FlagEOF`, and `s.IsEOF()` reports
   it. It is not part of the input.
@@ -43,11 +62,11 @@ the predicates `isASCIIDigit`, `isASCIILetter` and `isASCIIWhitespace`.
 
 ## Practice 1: one shape
 
-**Rule.** A constructor `newXxxRule(...) textlexer.Rule` builds the rule and
+**Rule.** A constructor `newXxxRule(...) bytescan.Rule` builds the rule and
 returns its start state. Every state has a name. A state without a parameter is
 a local variable, and the constructor declares all of them together
-(`var start, body, end textlexer.Rule`). A state with a parameter is a named
-constructor at file level (`afterDigits(n int) textlexer.Rule`). An anonymous
+(`var start, body, end bytescan.Rule`). A state with a parameter is a named
+constructor at file level (`afterDigits(n int) bytescan.Rule`). An anonymous
 closure is never nested more than one level: the closure that a constructor or
 a state constructor returns is the only level. A constructor of a rule with one
 state, such as `newSymbolRule`, may return that state directly; the
@@ -61,16 +80,16 @@ transition hard to follow.
 
 ```go
 // newSlashStarCommentRule returns a rule for (?s)/\*(?:[^*]|\*[^/])*\*/ ...
-func newSlashStarCommentRule() textlexer.Rule {
-	var start, afterSlash, body, afterStar textlexer.Rule
-	start = func(s textlexer.Symbol) (textlexer.Rule, textlexer.State) {
+func newSlashStarCommentRule() bytescan.Rule {
+	var start, afterSlash, body, afterStar bytescan.Rule
+	start = func(s bytescan.Symbol) (bytescan.Rule, bytescan.State) {
 		if s.IsEOF() {
-			return nil, textlexer.StateReject
+			return nil, bytescan.StateReject
 		}
 		if s.Rune() == '/' {
-			return afterSlash, textlexer.StateContinue
+			return afterSlash, bytescan.StateContinue
 		}
-		return nil, textlexer.StateReject
+		return nil, bytescan.StateReject
 	}
 	// afterSlash, body and afterStar follow the same pattern.
 	...
@@ -82,19 +101,19 @@ A state with a parameter is a named constructor:
 
 ```go
 // literalAt is the state of newLiteralRule that reads rune i of lit.
-func literalAt(lit []rune, i int) textlexer.Rule {
-	return func(s textlexer.Symbol) (textlexer.Rule, textlexer.State) { ... }
+func literalAt(lit []rune, i int) bytescan.Rule {
+	return func(s bytescan.Symbol) (bytescan.Rule, bytescan.State) { ... }
 }
 ```
 
 **Counter-example.** The states are anonymous and nested four levels deep:
 
 ```go
-forKeywordRule := func(s textlexer.Symbol) (textlexer.Rule, textlexer.State) {
+forKeywordRule := func(s bytescan.Symbol) (bytescan.Rule, bytescan.State) {
 	if s.Rune() == 'f' {
-		return func(s textlexer.Symbol) (textlexer.Rule, textlexer.State) {
+		return func(s bytescan.Symbol) (bytescan.Rule, bytescan.State) {
 			if s.Rune() == 'o' {
-				return func(s textlexer.Symbol) (textlexer.Rule, textlexer.State) {
+				return func(s bytescan.Symbol) (bytescan.Rule, bytescan.State) {
 					...
 ```
 
@@ -108,25 +127,25 @@ function.
   2. Then the state decides with an `if` or a `switch` on named predicates
      (practice 3).
   3. The last statement is the fallback for the symbols that no branch
-     handles: `return nil, textlexer.StateReject`. One exception: when every
+     handles: `return nil, bytescan.StateReject`. One exception: when every
      remaining symbol completes a lookahead decision, as in `keywordEnd`, the
      last statement may be that documented delegating verdict, for example
-     `return excludeLast(1, textlexer.StateAccept) // the symbol after the keyword`.
+     `return core.PushBack(1, bytescan.StateAccept) // the symbol after the keyword`.
      A reject there would change the match or be unreachable.
   4. Every `return` names its `State` constant, or is a delegating return.
   5. A scanning state never returns `StateAccept` for the EOF symbol. At end of
-     input it rejects, or it excludes the EOF symbol with `excludeLast`
+     input it rejects, or it excludes the EOF symbol with `core.PushBack`
      (practice 5).
 - **Pushback-chain callbacks.** The VM calls a callback with the symbol that
   the pushback just excluded. At end of input, the first callback receives the
   EOF symbol. A callback does not test for the EOF symbol and does not reject
   it. The last callback of the chain returns `(nil, StateAccept)` or
   `(nil, StateReject)` for any symbol, because the accepted span already
-  excludes that symbol. A rule never builds a callback by hand. It calls the
-  shared helper `excludeLast` (practice 5).
+  excludes that symbol. A rule never builds a callback by hand. It calls
+  `core.PushBack` (practice 5).
 - **Delegating returns.** A scanning state may return the result of a helper
-  call, for example `return excludeLast(1, textlexer.StateAccept)` or
-  `return literalAt(lit, i+1), textlexer.StateContinue`. The comment of the
+  call, for example `return core.PushBack(1, bytescan.StateAccept)` or
+  `return literalAt(lit, i+1), bytescan.StateContinue`. The comment of the
   helper states what it returns.
 
 The invariant behind the three rules: **an accepted span never counts the EOF
@@ -136,7 +155,7 @@ symbol.**
 scanning state must decide what end of input means for it. A state that tests
 the EOF symbol first makes that decision visible. An accept that counts the EOF
 symbol is longer than the input that was read, and the VM discards it
-([EOF handling](specs/core-contract.md#eof-handling)). The explicit final reject
+([EOF handling](specs/rule-vm-contract.md#eof-handling)). The explicit final reject
 makes it clear that every other symbol fails the rule. A callback is different:
 the pushback has already removed the symbol it receives from the match, so a
 test there would reject a valid match at end of input.
@@ -144,14 +163,14 @@ test there would reject a valid match at end of input.
 **Example.** A scanning state of `[A-Za-z_][A-Za-z0-9_]*`:
 
 ```go
-rest = func(s textlexer.Symbol) (textlexer.Rule, textlexer.State) {
+rest = func(s bytescan.Symbol) (bytescan.Rule, bytescan.State) {
 	if s.IsEOF() {
-		return nil, textlexer.StateReject // keeps the identifier read so far
+		return nil, bytescan.StateReject // keeps the identifier read so far
 	}
-	if isASCIIWord(s.Rune()) {
-		return rest, textlexer.StateAccept
+	if core.ASCIIWord(s.Rune()) {
+		return rest, bytescan.StateAccept
 	}
-	return nil, textlexer.StateReject
+	return nil, bytescan.StateReject
 }
 ```
 
@@ -160,11 +179,11 @@ must know that `RuneEOF` is `-1` and that `-1` fails the comparison. A state
 that continues on every other symbol also continues on the EOF symbol:
 
 ```go
-inComment = func(s textlexer.Symbol) (textlexer.Rule, textlexer.State) {
+inComment = func(s bytescan.Symbol) (bytescan.Rule, bytescan.State) {
 	if s.Rune() == '*' {
-		return afterStar, textlexer.StateContinue
+		return afterStar, bytescan.StateContinue
 	}
-	return inComment, textlexer.StateContinue
+	return inComment, bytescan.StateContinue
 }
 ```
 
@@ -172,22 +191,26 @@ A callback that rejects the EOF symbol loses the match at end of input:
 
 ```go
 // Wrong: on "a" at end of input this emits UNKNOWN "a", not A "a".
-return func(s textlexer.Symbol) (textlexer.Rule, textlexer.State) {
+return func(s bytescan.Symbol) (bytescan.Rule, bytescan.State) {
 	if s.IsEOF() {
-		return nil, textlexer.StateReject
+		return nil, bytescan.StateReject
 	}
-	return nil, textlexer.StateAccept
-}, textlexer.StatePushBack
+	return nil, bytescan.StateAccept
+}, bytescan.StatePushBack
 ```
 
 ## Practice 3: named predicates
 
-**Rule.** A character class is a named predicate `isXxx(r rune) bool`. The name
-says whether the class is ASCII-only or Unicode: `isASCIIDigit`,
-`isASCIILetter`, `isUnicodeLetter`. The comment of the predicate gives the class
-in regular-expression notation. A test for one literal rune
-(`s.Rune() == '/'`) is written inline. A positional flag is tested with the
-`Symbol` method (`s.IsBOL()`).
+**Rule.** A character class is a named class: a `core.Class` value of package
+`core` (`core.ASCIIDigit`, `core.ASCIILetter`, `core.UnicodeLetter`), a class
+built from them (`core.RuneSet("+-")`, `core.ASCIIDigit.Or(core.ASCIILower)`)
+and given a name, or a named predicate `isXxx(r rune) bool`. Use the core class
+when one exists. The name says whether the class is ASCII-only or Unicode:
+`core.ASCIIDigit`, `core.UnicodeLetter`, `isASCIIVowel`. The comment of a class
+or predicate that the rule defines gives the class in regular-expression
+notation; the classes of `core` give it in their doc comments. A test for one
+literal rune (`s.Rune() == '/'`) is written inline. A positional flag is tested
+with the `Symbol` method (`s.IsBOL()`).
 
 **Rationale.** A name states the intent, and the comment states the exact set.
 A reader does not have to decode a range expression in every state. ASCII and
@@ -197,13 +220,14 @@ which one the rule uses.
 **Example.**
 
 ```go
-// isASCIILetter reports whether r is in [A-Za-z].
-func isASCIILetter(r rune) bool {
-	return (r >= 'a' && r <= 'z') || (r >= 'A' && r <= 'Z')
-}
+if core.ASCIILetter(s.Rune()) { // [A-Za-z]
+```
 
-// isUnicodeLetter reports whether r is in \pL.
-func isUnicodeLetter(r rune) bool { return unicode.IsLetter(r) }
+A class that `core` does not have is named where the rule defines it:
+
+```go
+// isASCIIVowel reports whether r is in [AEIOUaeiou].
+var isASCIIVowel = core.RuneSet("AEIOUaeiou")
 ```
 
 **Counter-example.** The class is written inline, and its name (`letter`) does
@@ -220,20 +244,20 @@ immutable constructor parameters. No captured variable is written after the
 constructor returns.
 
 **Rationale.** The VM restarts every rule at its registered start state for
-each token ([principle 1](specs/core-contract.md#principle-1-stateless-stack-model)).
+each token ([principle 1](specs/design-principles.md#principle-1-stateless-stack-model)).
 A rule that writes a captured variable carries that value into the next token,
-and into every lexer that registered the same rule value. A rule that keeps its
-state in returned values can be registered in several lexers and reused for
+and into every scanner that registered the same rule value. A rule that keeps its
+state in returned values can be registered in several scanners and reused for
 every token.
 
 **Example.** The count lives in the returned rule value:
 
 ```go
 // countedDigits is the state of [0-9]{lo,hi} after n digits.
-func countedDigits(lo, hi, n int) textlexer.Rule {
-	return func(s textlexer.Symbol) (textlexer.Rule, textlexer.State) {
+func countedDigits(lo, hi, n int) bytescan.Rule {
+	return func(s bytescan.Symbol) (bytescan.Rule, bytescan.State) {
 		...
-		return countedDigits(lo, hi, n+1), textlexer.StateContinue
+		return countedDigits(lo, hi, n+1), bytescan.StateContinue
 	}
 }
 ```
@@ -243,8 +267,8 @@ starts with the depth that the first token left:
 
 ```go
 depth := 0
-var loop textlexer.Rule
-loop = func(s textlexer.Symbol) (textlexer.Rule, textlexer.State) {
+var loop bytescan.Rule
+loop = func(s bytescan.Symbol) (bytescan.Rule, bytescan.State) {
 	depth++
 	...
 }
@@ -255,7 +279,7 @@ loop = func(s textlexer.Symbol) (textlexer.Rule, textlexer.State) {
 **Rule.**
 
 - **Eager accept.** Within a token, the match that a rule records only grows
-  ([Rule states and pushback](specs/core-contract.md#rule-states-and-pushback)).
+  ([Rule states and pushback](specs/rule-vm-contract.md#rule-states-and-pushback)).
   So a rule accepts a span only when that span is a valid match on its own and
   no later decision can need to withdraw it or shorten it. A pending lookahead
   decision that can only grow the match does not stop the accept: `ab|abcd(?=ef)`
@@ -265,27 +289,27 @@ loop = func(s textlexer.Symbol) (textlexer.Rule, textlexer.State) {
   does stop it: the rule returns `StateContinue` past that span until it has
   decided.
 - **Lookahead.** When the rule settles on a span shorter than what it has
-  read, it ends with exactly one pushback chain, built by the shared helper
-  `excludeLast(n, state)`. `state` is `StateAccept` or `StateReject`. The call
+  read, it ends with exactly one pushback chain, built by
+  `core.PushBack(n, state)`. `state` is `StateAccept` or `StateReject`. The call
   site has a comment that names the `n` excluded symbols. At end of input, the
   first of them is the EOF symbol. A rule that settles in any other way needs
   no chain: it accepts everything it has read, or it rejects and keeps the
   accept it recorded earlier, if any.
 - **Lookahead combined with a longer match.** Use delayed acceptance, the
   supported construction
-  ([Lookahead combined with a longer match](specs/core-contract.md#lookahead-combined-with-a-longer-match)).
+  ([Lookahead combined with a longer match](specs/rule-vm-contract.md#lookahead-combined-with-a-longer-match)).
   The rule keeps scanning while the longer branch can still match, and it
   records no accept that is shorter than what it has read. It either accepts
   the longer match, or it ends with one terminal pushback chain back to the
   validated shorter match. A chain never ends in `StateContinue` or in a
   non-nil `next` with `StateAccept`.
 
-The helper:
+The helper, from package `core`:
 
 ```go
-// excludeLast returns the verdict of a rule that excludes the last n symbols
-// (n >= 1) from its match and then ends the pushback chain with (nil, s).
-func excludeLast(n int, s textlexer.State) (textlexer.Rule, textlexer.State)
+// PushBack returns the verdict of a rule that excludes the last n symbols
+// (n >= 1) from its match and then ends the pushback chain with (nil, state).
+func PushBack(n int, state bytescan.State) (bytescan.Rule, bytescan.State)
 ```
 
 **Rationale.** Pushback cannot shorten an accept that the rule already
@@ -295,20 +319,20 @@ no chain counts the EOF symbol by mistake. The comment on `n` is where the
 off-by-one error happens, in particular the extra symbol at end of input.
 
 **Example: lookahead with one excluded symbol.** A keyword matches only before
-a symbol that cannot continue a word:
+a symbol that cannot continue a word. `core.Keyword(keyword, c)` is this rule:
 
 ```go
 // keywordEnd is the state of newKeywordRule after the keyword. It decides by
 // one symbol of lookahead.
-func keywordEnd(continuesWord func(rune) bool) textlexer.Rule {
-	return func(s textlexer.Symbol) (textlexer.Rule, textlexer.State) {
+func keywordEnd(continuesWord core.Class) bytescan.Rule {
+	return func(s bytescan.Symbol) (bytescan.Rule, bytescan.State) {
 		if s.IsEOF() {
-			return excludeLast(1, textlexer.StateAccept) // the EOF symbol
+			return core.PushBack(1, bytescan.StateAccept) // the EOF symbol
 		}
 		if continuesWord(s.Rune()) {
-			return nil, textlexer.StateReject
+			return nil, bytescan.StateReject
 		}
-		return excludeLast(1, textlexer.StateAccept) // the symbol after the keyword
+		return core.PushBack(1, bytescan.StateAccept) // the symbol after the keyword
 	}
 }
 ```
@@ -318,33 +342,35 @@ func keywordEnd(continuesWord func(rune) bool) textlexer.Rule {
 symbol before it can accept, so it never accepts a letter. On the EOF symbol it
 excludes that one symbol and accepts the letters. The token is not empty,
 because the start state requires one letter. The committed test is
-`TestRuleAuthoringEOFPushbackExample` in `textlexer_test.go`: on `ab` it emits
-`WORD "ab"`, and on `ab cd` it emits `UNKNOWN "a"`, `UNKNOWN "b"`,
-`UNKNOWN " "` and `WORD "cd"`.
+`TestPushBack` in `rules/core/lookahead_test.go`, which uses this code: on `ab`
+it emits `ab`, and on `ab cd` it emits `UNKNOWN "a"`, `UNKNOWN "b"`,
+`UNKNOWN " "` and `cd`. `TestRuleAuthoringEOFPushbackExample` in
+`tests/scanner_lookahead_test.go` pins the same streams with the test package's
+own copy of the helper.
 
 ```go
 // newLettersAtEndRule returns a rule for [A-Za-z]+\z: a run of ASCII letters
 // that ends the input. At end of input it excludes the EOF symbol and accepts
 // the letters; any other symbol after a letter rejects.
-func newLettersAtEndRule() textlexer.Rule {
-	var start, letters textlexer.Rule
-	start = func(s textlexer.Symbol) (textlexer.Rule, textlexer.State) {
+func newLettersAtEndRule() bytescan.Rule {
+	var start, letters bytescan.Rule
+	start = func(s bytescan.Symbol) (bytescan.Rule, bytescan.State) {
 		if s.IsEOF() {
-			return nil, textlexer.StateReject
+			return nil, bytescan.StateReject
 		}
-		if isASCIILetter(s.Rune()) {
-			return letters, textlexer.StateContinue
+		if core.ASCIILetter(s.Rune()) {
+			return letters, bytescan.StateContinue
 		}
-		return nil, textlexer.StateReject
+		return nil, bytescan.StateReject
 	}
-	letters = func(s textlexer.Symbol) (textlexer.Rule, textlexer.State) {
+	letters = func(s bytescan.Symbol) (bytescan.Rule, bytescan.State) {
 		if s.IsEOF() {
-			return excludeLast(1, textlexer.StateAccept) // the EOF symbol
+			return core.PushBack(1, bytescan.StateAccept) // the EOF symbol
 		}
-		if isASCIILetter(s.Rune()) {
-			return letters, textlexer.StateContinue
+		if core.ASCIILetter(s.Rune()) {
+			return letters, bytescan.StateContinue
 		}
-		return nil, textlexer.StateReject
+		return nil, bytescan.StateReject
 	}
 	return start
 }
@@ -355,57 +381,58 @@ func newLettersAtEndRule() textlexer.Rule {
 has been read, but the rule does not accept it then, because `abcdefgh` can
 still match. If `gh` follows, it accepts all eight symbols. If the longer
 branch fails, it excludes everything after `abcd`, the symbol that failed
-included. The example gives the expected lexeme stream for
+included. The example gives the expected token stream for
 `abcdefgh`, `abcdefxx`, `abcdef`, `abcdefg`, `abcdefgX`, `abcde`, `abcdX` and
-`abcdefghabcdef`. `TestLookaheadDelayedAcceptance` in `textlexer_test.go`
-pins the same construction with `newLookaheadOrLongerRule`.
+`abcdefghabcdef`. `TestLookaheadDelayedAcceptance` in
+`tests/scanner_lookahead_test.go` pins the same construction with
+`newLookaheadOrLongerRule`.
 
 ```go
 // newABCDBeforeEFOrABCDEFGHRule returns a rule for abcd(?=ef)|abcdefgh, in
 // Perl notation, with delayed acceptance. At end of input after "abcdef" it
 // excludes the runes after "abcd" and the EOF symbol, and accepts "abcd".
-func newABCDBeforeEFOrABCDEFGHRule() textlexer.Rule {
+func newABCDBeforeEFOrABCDEFGHRule() bytescan.Rule {
 	return abcdefghAt(0)
 }
 
 // abcdefghAt is the state of newABCDBeforeEFOrABCDEFGHRule that reads rune i
 // of "abcdefgh". From i = 6 on, "abcd" is validated by "ef".
-func abcdefghAt(i int) textlexer.Rule {
+func abcdefghAt(i int) bytescan.Rule {
 	const long = "abcdefgh"
-	return func(s textlexer.Symbol) (textlexer.Rule, textlexer.State) {
+	return func(s bytescan.Symbol) (bytescan.Rule, bytescan.State) {
 		if s.IsEOF() {
 			if i >= 6 {
-				return excludeLast(i+1-4, textlexer.StateAccept) // the runes after "abcd", and the EOF symbol
+				return core.PushBack(i+1-4, bytescan.StateAccept) // the runes after "abcd", and the EOF symbol
 			}
-			return nil, textlexer.StateReject
+			return nil, bytescan.StateReject
 		}
 		if s.Rune() == rune(long[i]) {
 			if i == len(long)-1 {
-				return nil, textlexer.StateAccept
+				return nil, bytescan.StateAccept
 			}
-			return abcdefghAt(i + 1), textlexer.StateContinue
+			return abcdefghAt(i + 1), bytescan.StateContinue
 		}
 		if i >= 6 {
-			return excludeLast(i+1-4, textlexer.StateAccept) // the runes after "abcd", and the symbol just read
+			return core.PushBack(i+1-4, bytescan.StateAccept) // the runes after "abcd", and the symbol just read
 		}
-		return nil, textlexer.StateReject
+		return nil, bytescan.StateReject
 	}
 }
 ```
 
 **Counter-example.** The rule accepts `abcd` early and then tries to continue
 with the longer branch. The chain ends in a non-nil `next` with `StateAccept`,
-which is unsupported ([KD-5](specs/core-contract.md#known-deviations)), and the
+which is unsupported ([chain endings](specs/rule-vm-contract.md#chain-endings)), and the
 continuation expects to see `e` and `f` again. On `abcdefgh` the rule emits
 `abcd` and four `UNKNOWN` runes:
 
 ```go
 case 5: // the 'f' of "abcdef": exclude "ef", record "abcd", continue at 'e'
-	return func(textlexer.Symbol) (textlexer.Rule, textlexer.State) {
-		return func(textlexer.Symbol) (textlexer.Rule, textlexer.State) {
-			return abcdefghAt(4), textlexer.StateAccept // unsupported: non-nil next
-		}, textlexer.StatePushBack
-	}, textlexer.StatePushBack
+	return func(bytescan.Symbol) (bytescan.Rule, bytescan.State) {
+		return func(bytescan.Symbol) (bytescan.Rule, bytescan.State) {
+			return abcdefghAt(4), bytescan.StateAccept // unsupported: non-nil next
+		}, bytescan.StatePushBack
+	}, bytescan.StatePushBack
 ```
 
 The construction also breaks practice 2: it builds the pushback-chain
@@ -426,18 +453,18 @@ A constructor may panic on an invalid argument, for example an empty literal,
 because that panic happens at construction time, not while the VM runs.
 
 **Rationale.** The VM contains a rule that breaks these points
-([Custom-rule responsibilities](specs/core-contract.md#custom-rule-responsibilities)),
+([Custom-rule responsibilities](specs/rule-vm-contract.md#custom-rule-responsibilities)),
 but the rule then loses its intended match. A rule that does not settle makes
 every token read to the end of input. A side effect is permanent: the VM calls
 losing candidates too, and it does not roll back their effects. A rule that
 depends on anything other than its symbols gives a different token stream for
 the same input.
 
-**Example.** `newLiteralRule` rejects an empty literal at construction time and
-consumes one rune per state:
+**Example.** `newLiteralRule`, a hand-written `core.Literal`, rejects an empty
+literal at construction time and consumes one rune per state:
 
 ```go
-func newLiteralRule(lit string) textlexer.Rule {
+func newLiteralRule(lit string) bytescan.Rule {
 	if lit == "" {
 		panic("newLiteralRule: lit must not be empty")
 	}
@@ -450,10 +477,10 @@ depends on how often the VM called it before:
 
 ```go
 callCount := 0
-rule = func(s textlexer.Symbol) (textlexer.Rule, textlexer.State) {
+rule = func(s bytescan.Symbol) (bytescan.Rule, bytescan.State) {
 	callCount++
 	if callCount > 4 {
-		return nil, textlexer.StateReject
+		return nil, bytescan.StateReject
 	}
 	...
 }
@@ -491,11 +518,15 @@ expression nor the end-of-input behaviour.
 
 ## Practice 8: naming
 
-**Rule.** A rule constructor is `newXxxRule`, where `Xxx` names what the rule
-matches. A named state constructor is a noun phrase for the position in the
-rule (`literalAt`, `afterDigits`, `keywordEnd`). A predicate is `isXxx`. A
-declared lexeme type constant is `lexTypeXxx`. Initialisms keep one case
-(`newASCIILettersRule`, `isASCIIDigit`).
+**Rule.** A hand-written rule constructor is `newXxxRule`, where `Xxx` names
+what the rule matches. An exported constructor of a `rules/` package is the full
+descriptive name of what it matches, with no `new` prefix and no `Rule` suffix
+(`core.Literal`, `core.RuneRun`, `base.Identifier`), because the package name
+already says that it returns a rule. A named state constructor is a noun phrase
+for the position in the rule (`literalAt`, `afterDigits`, `keywordEnd`). A
+predicate is `isXxx`. A declared token type constant is `lexTypeXxx`.
+Initialisms keep one case (`newASCIILettersRule`, `isASCIIDigit`,
+`core.ASCIIDigit`).
 
 **Rationale.** A reader recognizes the start of a rule by its name and finds
 all rules with one search.
@@ -509,7 +540,7 @@ they return a rule, and they do not start with `new`.
 ## Practice 9: tests
 
 **Rule.** Each rule has conformance cases in the style of
-`TestRegexpConformance` (`textlexer_regexp_test.go`):
+`TestRegexpConformance` (`tests/regexp_test.go`):
 
 - an input that matches;
 - an input that does not match;
@@ -519,11 +550,15 @@ they return a rule, and they do not start with `new`.
 - the empty input.
 
 A rule whose regular expression Go's `regexp` can check is a row of
-`TestRegexpConformance`. A rule with lookahead, a positional flag or a
-back-reference has hand-written cases with complete expected lexeme streams,
-as in `TestRegexpWithoutOracle` and the `TestLookahead...` tests. A rule that
-ends by lookahead has a case in which the end of input completes the lookahead
-and the token is emitted.
+`TestRegexpConformance`, or, for a rule of a `rules/` package, a row of its
+tier's oracle test in `tests/` (`TestCoreMatchesRegexpOracle`,
+`TestCoreCombinatorsMatchRegexpOracle`, `TestBaseCodeRulesMatchRegexpOracle`,
+`TestBaseTextMatchesRegexpOracle`, `TestSpecialMatchesRegexpOracle`). No file
+under `rules/` imports `regexp` ([import rules](rules.md#import-rules)). A rule
+with lookahead, a positional flag or a back-reference has hand-written cases
+with complete expected token streams, as in `TestRegexpWithoutOracle` and the
+`TestLookahead...` tests. A rule that ends by lookahead has a case in which the
+end of input completes the lookahead and the token is emitted.
 
 **Rationale.** Go's `regexp` is an independent oracle for the matched text. End
 of input is where most rule defects are, and each scanning state reacts to the
@@ -541,6 +576,40 @@ EOF symbol on its own.
 
 **Counter-example.** A rule that only appears in a stream test for one
 sentence of input, with no input that ends inside the rule.
+
+## Rules over bytes
+
+A scanner of binary data reads its input through the byte adapter
+`bytesource.NewCursor`, which gives the scanner each byte as one rune, U+0000 to
+U+00FF. A rule for binary data is still a rule over runes, and every practice
+of this document applies to it unchanged. Four points differ from a rule for
+text:
+
+- **Write byte values as runes.** A class of bytes is a class of runes from
+  U+0000 to U+00FF: `bytesource.AnyByte`, `core.RuneRange(0x80, 0xFF)`, or a
+  named predicate on `s.Rune()` (practice 3). Write a byte sequence as
+  `octet.Literal([]byte{0xFF, 0xD8})` or
+  `core.Literal(bytesource.Text("\xff\xd8"))`. Never write
+  `core.Literal("\xff")`: Go decodes that string as UTF-8 to U+FFFD, and the
+  rule never matches the byte FF.
+- **The EOF symbol is not a byte.** `RuneEOF` is -1, outside the byte range,
+  so no byte value can be taken for the end of input. A scanning state still
+  handles the EOF symbol first (practice 2).
+- **Line flags mean nothing in binary data.** The symbol flags come from the
+  cursor's positions, so `IsEOL` is true on every 0x0A byte and `IsBOL` on the
+  byte after it. A rule for binary data does not read them and is not wrapped
+  in `core.AtLineStart`. `IsBOF` and `IsEOF` keep their meaning.
+- **A length stored in the data is read by a driver.** A rule that counts out
+  a stored length holds the whole field as one open token, about 10 bytes of
+  live heap per input byte, and a corrupt length makes it read on. Match the
+  fixed part of a header with a rule, and let a driver read the counted field
+  with `bytesource.Read` or `bytesource.Fields`; `Fields` can also cut it
+  into pieces of a bounded size. Bound every run with `core.RuneRunMax`, so that input
+  that has lost a delimiter still comes out in bounded tokens.
+
+Package `rules/octet` builds the common byte rules from core: one byte, fixed
+fields and variable-length integers. Its rules follow this standard through
+core.
 
 ## Exempt engine probes
 
@@ -569,25 +638,26 @@ lines.
       Every state is a named local variable declared together, or a named
       constructor. No anonymous closure is nested more than one level.
 - [ ] **2a. Scanning states.** Each one tests `s.IsEOF()` first, decides with
-      named predicates, and ends with `return nil, textlexer.StateReject` for
-      the unhandled symbols, or with a commented terminal `excludeLast`
+      named predicates, and ends with `return nil, bytescan.StateReject` for
+      the unhandled symbols, or with a commented terminal `core.PushBack`
       verdict when every remaining symbol completes the lookahead.
       Every return names its `State` constant or is a delegating return. No
       scanning state returns `StateAccept` for the EOF symbol.
 - [ ] **2b. Pushback-chain callbacks.** The rule builds no callback by hand;
-      every chain comes from `excludeLast`. No callback tests for or rejects the
-      EOF symbol.
+      every chain comes from `core.PushBack`. No callback tests for or rejects
+      the EOF symbol.
 - [ ] **2c. Delegating returns.** Each one calls a helper whose comment states
       what it returns.
-- [ ] **3. Named predicates.** Every character class is an `isXxx(r rune) bool`
-      predicate whose name says ASCII or Unicode and whose comment gives the
-      class.
+- [ ] **3. Named predicates.** Every character class is a `core` class, a
+      named class built from them, or an `isXxx(r rune) bool` predicate. Its
+      name says ASCII or Unicode, and the comment of a class the rule defines
+      gives the class.
 - [ ] **4. State in returned rules.** No captured variable is written after the
       constructor returns.
 - [ ] **5. Accept discipline and lookahead.** Every accept is a valid match
       that no later decision needs to withdraw or shorten; while a decision
       can need a shorter span, the rule continues. A rule that settles on a
-      span shorter than what it has read ends with one `excludeLast` chain,
+      span shorter than what it has read ends with one `core.PushBack` chain,
       and the call site comments the `n` excluded symbols, the EOF symbol
       included. A rule with lookahead and a longer branch uses delayed
       acceptance. No chain ends in `StateContinue` or in a non-nil `next`
@@ -596,8 +666,9 @@ lines.
       no panic, no side effect, depends only on its symbols.
 - [ ] **7. Documentation.** The constructor comment gives the regular
       expression (or a prose definition) and the behaviour at end of input.
-- [ ] **8. Naming.** `newXxxRule`, `isXxx`, `lexTypeXxx`; initialisms in one
-      case.
+- [ ] **8. Naming.** `newXxxRule`, `isXxx`, `lexTypeXxx` for hand-written
+      code; full descriptive names for exported `rules/` constructors;
+      initialisms in one case.
 - [ ] **9. Tests.** Conformance cases: a match, a non-match, a match that
       stops early, the end of input in each scanning state, and the empty
       input. A lookahead rule has a case in which the end of input completes
