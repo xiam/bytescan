@@ -186,9 +186,8 @@ in the consumer's own code, composed from core and base.
 - `rules/octet` may import `bytescan`, `rules/core`, `bytesource` and the
   standard library. No other tier imports `rules/octet`, and `rules/octet`
   imports no other tier.
-- No package under `rules/` imports a module outside this repository, other
-  than the `github.com/xiam/textreader` dependency that `bytescan` already
-  has. Test files may also import the test-assertion module that the
+- No package under `rules/` imports a module outside this repository.
+  Test files may also import the test-assertion module that the
   repository's other tests use, and the shared test helpers in
   `internal/lextest`.
 - **No file under `rules/` imports Go's `regexp` package**, test files
@@ -211,7 +210,7 @@ of live heap per input byte for ASCII input, and about 3 times that at peak
 (see the package documentation of `bytescan`). `bytescan.WithMaxTokenBytes`
 is the only hard bound on it, and it is fail-stop: a token that would exceed
 the bound makes `Next` return an error wrapping
-`textreader.ErrRetentionExceeded`. A scanner over a shared cursor takes the bound
+`cursor.ErrRetentionExceeded`. A scanner over a shared cursor takes the bound
 through `NewWithCursorOptions`.
 
 The base rules whose read-ahead can be rejected — `Quoted`, `QuotedMultiline`,

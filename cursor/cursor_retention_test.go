@@ -1,0 +1,163 @@
+package cursor_test
+
+import (
+	"io"
+	"strings"
+	"testing"
+
+	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
+	"github.com/xiam/bytescan/cursor"
+)
+
+// TestRetentionLimitAllowsRuneThatFits covers a retention limit that is large
+// enough for the next rune but smaller than a maximal rune.
+func TestRetentionLimitAllowsRuneThatFits(t *testing.T) {
+	t.Run("byte source", func(t *testing.T) {
+		tr := cursor.NewReader(
+			strings.NewReader("ab"),
+			cursor.WithCapacity(4),
+			cursor.WithMaxRetained(1),
+		)
+
+		cp := tr.Checkpoint()
+		defer func() { _ = cp.Release() }()
+
+		lr, err := tr.ReadLocatedRune()
+		require.NoError(t, err)
+		assert.Equal(t, 'a', lr.Rune())
+
+		_, err = tr.ReadLocatedRune()
+		assert.ErrorIs(t, err, cursor.ErrRetentionExceeded)
+	})
+
+	t.Run("rune source", func(t *testing.T) {
+		tr := cursor.NewRuneReader(
+			&runeOnlySource{runes: []rune("ab")},
+			cursor.WithCapacity(4),
+			cursor.WithMaxRetained(1),
+		)
+
+		cp := tr.Checkpoint()
+		defer func() { _ = cp.Release() }()
+
+		lr, err := tr.ReadLocatedRune()
+		require.NoError(t, err)
+		assert.Equal(t, 'a', lr.Rune())
+
+		_, err = tr.ReadLocatedRune()
+		assert.ErrorIs(t, err, cursor.ErrRetentionExceeded)
+	})
+}
+
+// TestRetentionBudgetEnforcedOnConsumption covers data buffered before a
+// checkpoint: the limit must bound what the checkpoint makes the reader retain,
+// not only what a later fill may read.
+func TestRetentionBudgetEnforcedOnConsumption(t *testing.T) {
+	tr := cursor.NewReader(
+		strings.NewReader("abcdef"),
+		cursor.WithCapacity(64),
+		cursor.WithMaxRetained(1),
+	)
+
+	// Read-ahead happens before the checkpoint, so the bytes are already
+	// buffered when the budget starts to apply.
+	first, err := tr.ReadLocatedRune()
+	require.NoError(t, err)
+	require.Equal(t, 'a', first.Rune())
+
+	cp := tr.Checkpoint()
+	defer func() { _ = cp.Release() }()
+
+	_, err = tr.ReadLocatedRune()
+	require.NoError(t, err, "one retained byte is within a one-byte limit")
+	assert.Equal(t, 1, tr.RetainedBytes())
+
+	_, err = tr.ReadLocatedRune()
+	require.ErrorIs(t, err, cursor.ErrRetentionExceeded)
+	assert.Equal(t, 1, tr.RetainedBytes(), "the refused read must not move the cursor")
+	assert.Equal(t, 2, tr.Cursor().ByteOffset(), "the cursor stays where the last accepted read left it")
+}
+
+// TestRetentionBudgetRejectsRuneLargerThanBudget covers a rune that cannot fit
+// the remaining budget: it must be reported, not half-decoded.
+func TestRetentionBudgetRejectsRuneLargerThanBudget(t *testing.T) {
+	t.Run("byte source", func(t *testing.T) {
+		tr := cursor.NewReader(
+			strings.NewReader("€"),
+			cursor.WithMaxRetained(2),
+		)
+
+		cp := tr.Checkpoint()
+		defer func() { _ = cp.Release() }()
+
+		_, err := tr.ReadLocatedRune()
+		require.ErrorIs(t, err, cursor.ErrRetentionExceeded)
+		assert.Equal(t, 0, tr.Cursor().ByteOffset(), "the cursor must not move")
+		assert.Equal(t, 0, tr.Cursor().RuneOffset())
+	})
+
+	t.Run("rune source", func(t *testing.T) {
+		tr := cursor.NewRuneReader(
+			&runeOnlySource{runes: []rune("€")},
+			cursor.WithMaxRetained(2),
+		)
+
+		cp := tr.Checkpoint()
+		defer func() { _ = cp.Release() }()
+
+		_, err := tr.ReadLocatedRune()
+		require.ErrorIs(t, err, cursor.ErrRetentionExceeded)
+		assert.Equal(t, 0, tr.Cursor().ByteOffset(), "the cursor must not move")
+	})
+}
+
+// TestBulkReadBudgetIsAtomic covers the documented promise that an over-budget
+// read performs no partial work.
+func TestBulkReadBudgetIsAtomic(t *testing.T) {
+	tr := cursor.NewReader(
+		strings.NewReader("abcdef"),
+		cursor.WithMaxRetained(4),
+	)
+
+	cp := tr.Checkpoint()
+	defer func() { _ = cp.Release() }()
+
+	buf := make([]byte, 5)
+
+	n, err := tr.Read(buf)
+	require.ErrorIs(t, err, cursor.ErrRetentionExceeded)
+	assert.Equal(t, 0, n, "no partial work")
+	assert.Equal(t, 0, tr.Cursor().ByteOffset(), "the cursor must not move")
+
+	// A read that fits the budget still succeeds.
+	small := make([]byte, 4)
+	n, err = tr.Read(small)
+	require.NoError(t, err)
+	assert.Equal(t, 4, n)
+	assert.Equal(t, "abcd", string(small))
+}
+
+// TestBulkReadBudgetUsesActualAvailability covers a destination larger than the
+// remaining budget: the budget must be judged against the bytes that would
+// really advance the cursor, not against the caller's destination size.
+func TestBulkReadBudgetUsesActualAvailability(t *testing.T) {
+	tr := cursor.NewReader(
+		strings.NewReader("a"),
+		cursor.WithMaxRetained(1),
+	)
+
+	cp := tr.Checkpoint()
+	defer func() { _ = cp.Release() }()
+
+	buf := make([]byte, 4096)
+
+	n, err := tr.Read(buf)
+	require.NoError(t, err, "the one available byte fits a one-byte budget")
+	assert.Equal(t, 1, n)
+	assert.Equal(t, "a", string(buf[:n]))
+
+	n, err = tr.Read(buf)
+	require.ErrorIs(t, err, io.EOF, "the budget is spent and the source is drained")
+	assert.Equal(t, 0, n)
+}

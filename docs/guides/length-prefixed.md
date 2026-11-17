@@ -87,18 +87,18 @@ only.
 - **Without a sync marker there is no resynchronisation.** After a corrupt
   length the driver frames packets wherever the corrupt bytes put them. Say
   so in your documentation; do not guess a frame start.
-- **`Offset` and `Len` are the byte positions.** Through `bytesource`,
-  `ByteOffset`, `Line` and `Column` are not positions in the input, and the
-  token guard counts a byte of 0x80 or above as two bytes. These are current
-  limits of the cursor.
+- **Every position is a byte position.** Through `bytesource.NewCursor`,
+  `Offset`, `ByteOffset` and `Len` are file offsets and lengths in bytes,
+  `Line` advances on each 0x0A byte, `Column` counts bytes, and the token
+  guard counts one for each byte.
 
 ## Tests to write
 
 - A golden test of each packet type, in hex (`bytesource.Hex` prints one line
   per token), with the cut cases: a length that runs past the end of the
   input, a length of 0.
-- A release test: `streamtest.LexRetained` lexes over a cursor that retains
-  at most `n` bytes, with a field longer than `n`. It fails when the driver
+- A release test: `streamtest.LexRetainedBytes` lexes over a byte-mode
+  cursor that retains at most `n` bytes, with a field longer than `n`. It fails when the driver
   does not release its scanner before it reads.
 - A test of the largest length the protocol allows, put before a generated
   stream with `streamtest.Prefix`, which proves that memory follows the piece

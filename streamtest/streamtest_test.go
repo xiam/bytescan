@@ -12,8 +12,8 @@ import (
 	"testing"
 
 	"github.com/xiam/bytescan"
+	"github.com/xiam/bytescan/cursor"
 	"github.com/xiam/bytescan/rules/core"
-	"github.com/xiam/textreader"
 )
 
 // lineRecord writes a line of the form "word=word word ...\n", with words of
@@ -70,7 +70,7 @@ func (d *twoScanners) Next() (*bytescan.Token, error) {
 // is never released, so its checkpoint pins all the input read after it: the
 // deliberate leak of the self-test.
 func newTwoScanners(r io.Reader, release bool) *twoScanners {
-	return newTwoScannersOn(textreader.NewReader(r), release)
+	return newTwoScannersOn(cursor.NewReader(r), release)
 }
 
 // newTwoScannersOn is newTwoScanners over the cursor cur.
@@ -92,6 +92,39 @@ func newTwoScannersOn(cur bytescan.Cursor, release bool) *twoScanners {
 
 func newLeakyScanner(r io.Reader) *twoScanners    { return newTwoScanners(r, false) }
 func newReleasedScanner(r io.Reader) *twoScanners { return newTwoScanners(r, true) }
+
+// defaultGenerator returns a generator of lineRecord with the default budget
+// of a run without -streamtest.long, as if built without WithBudget, so that
+// Run applies the defaults of an implicit budget. Under -streamtest.long it
+// keeps that budget instead of LongBudget.
+func defaultGenerator(seed int64) *Generator {
+	g := NewGenerator(seed, lineRecord, WithBudget(defaultBudget))
+	g.explicitBudget = false
+	return g
+}
+
+// withBaselineAfter sets the token progress before the baseline sample, as
+// the race detector does for a stream with the default budget.
+func withBaselineAfter(n int64) Option {
+	return func(c *config) {
+		c.baselineAfter = n
+	}
+}
+
+// samplePoint is where Run took a heap sample: the offset of the last token
+// and the bytes read from the source.
+type samplePoint struct {
+	pos, read int64
+}
+
+// withSamples records every heap sample of a run in dst.
+func withSamples(dst *[]samplePoint) Option {
+	return func(c *config) {
+		c.onSample = func(pos, read int64) {
+			*dst = append(*dst, samplePoint{pos, read})
+		}
+	}
+}
 
 func readAll(t *testing.T, r io.Reader) []byte {
 	t.Helper()
@@ -227,9 +260,9 @@ func TestRunLong(t *testing.T) {
 
 // TestLeakFails proves that the ceiling catches growth: a scanner whose idle
 // second scanner is never released pins the stream and fails at the default
-// budget and ceiling.
+// budget, ceiling and baseline.
 func TestLeakFails(t *testing.T) {
-	_, err := run(newLeakyScanner, NewGenerator(1, lineRecord, WithBudget(defaultBudget)))
+	_, err := run(newLeakyScanner, defaultGenerator(1))
 	if !errors.Is(err, ErrCeiling) {
 		t.Fatalf("got error %v, want ErrCeiling", err)
 	}
@@ -239,14 +272,14 @@ func TestLeakFails(t *testing.T) {
 // TestLeakReleased is TestLeakFails with the idle scanner released: the same
 // stream stays under the ceiling.
 func TestLeakReleased(t *testing.T) {
-	Run(t, newReleasedScanner, NewGenerator(1, lineRecord, WithBudget(defaultBudget)))
+	Run(t, newReleasedScanner, defaultGenerator(1))
 }
 
 // TestRunCorrupt lexes a corrupted stream and checks, as the tokens arrive,
 // that each garbage run lexes as UNKNOWN tokens and that the next token is
 // the first WORD of the record that follows it.
 func TestRunCorrupt(t *testing.T) {
-	c := Corrupt(NewGenerator(3, lineRecord, WithBudget(defaultBudget)), 4, 0.05, Garbage(garbage, 1, 16))
+	c := Corrupt(defaultGenerator(3), 4, 0.05, Garbage(garbage, 1, 16))
 
 	var (
 		cur     Injection
@@ -285,6 +318,159 @@ func TestTooFewSamples(t *testing.T) {
 	_, err := run(newLineScanner, NewGenerator(1, lineRecord, WithBudget(budget)), WithSampleEvery(4*budget))
 	if err == nil || !strings.Contains(err.Error(), "no growth was checked") {
 		t.Fatalf("got error %v, want the too-few-samples error", err)
+	}
+}
+
+// TestCeilingContract checks the default ceiling: DefaultCeiling keeps its
+// formula for every budget, and only under the race detector does a stream
+// with the implicit default budget and no WithCeiling get 48 KiB.
+func TestCeilingContract(t *testing.T) {
+	for _, c := range []struct{ budget, want int64 }{
+		{1, 48 << 10},
+		{64 << 10, 48 << 10},
+		{96 << 10, 48 << 10},
+		{192 << 10, 96 << 10},
+		{256 << 10, 128 << 10},
+		{512 << 10, 256 << 10},
+		{LongBudget, 16 << 20},
+	} {
+		if got := DefaultCeiling(c.budget); got != c.want {
+			t.Errorf("DefaultCeiling(%d) = %d, want %d", c.budget, got, c.want)
+		}
+	}
+
+	wantBudget, implicit := int64(512<<10), int64(256<<10)
+	if raceDetector {
+		wantBudget, implicit = 256<<10, 48<<10
+	}
+	if defaultBudget != wantBudget {
+		t.Fatalf("default budget is %d, want %d", defaultBudget, wantBudget)
+	}
+	if !Long() && DefaultCeiling(DefaultBudget()) != DefaultCeiling(wantBudget) {
+		t.Errorf("DefaultCeiling(DefaultBudget()) = %d, want the formula value %d", DefaultCeiling(DefaultBudget()), DefaultCeiling(wantBudget))
+	}
+
+	// An implicit budget gets 48 KiB under the race detector and the formula
+	// value of its budget without it; an explicit one always gets the formula.
+	head := []byte("a=b\n")
+	for _, c := range []struct {
+		name     string
+		src      Source
+		implicit bool
+	}{
+		{"implicit", defaultGenerator(1), true},
+		{"corrupted implicit", Corrupt(defaultGenerator(1), 2, 0.1, Garbage(garbage, 1, 4)), true},
+		{"prefixed implicit", Prefix(defaultGenerator(1), head), true},
+		{"explicit, equal to the default", NewGenerator(1, lineRecord, WithBudget(defaultBudget)), false},
+		{"prefixed explicit", Prefix(NewGenerator(1, lineRecord, WithBudget(defaultBudget)), head), false},
+		{"explicit 64 KiB", NewGenerator(1, lineRecord, WithBudget(64<<10)), false},
+		{"explicit 1 MiB", NewGenerator(1, lineRecord, WithBudget(1<<20)), false},
+	} {
+		want, wantAfter := DefaultCeiling(c.src.Budget()), int64(0)
+		if raceDetector && c.implicit {
+			want, wantAfter = 48<<10, cursorBuffer
+		}
+		if got := defaultCeiling(c.src); got != want {
+			t.Errorf("%s: default ceiling %d, want %d", c.name, got, want)
+		}
+		if got := defaultBaselineAfter(c.src); got != wantAfter {
+			t.Errorf("%s: baseline after %d bytes, want %d", c.name, got, wantAfter)
+		}
+	}
+
+	// The long run keeps the formula ceiling and the first-sample baseline.
+	saved := *long
+	*long = true
+	g := NewGenerator(1, lineRecord)
+	*long = saved
+	if g.Budget() != LongBudget || defaultCeiling(g) != 16<<20 || defaultBaselineAfter(g) != 0 {
+		t.Errorf("long run: budget %d, ceiling %d, baseline after %d; want %d, %d, 0",
+			g.Budget(), defaultCeiling(g), defaultBaselineAfter(g), LongBudget, 16<<20)
+	}
+
+	// Run enforces the implicit default, and its baseline waits for the first
+	// cursor buffer under the race detector only. The leaky scanner stops the
+	// run at its first sample after the baseline, so the check is short.
+	var samples []samplePoint
+	res, err := run(newLeakyScanner, defaultGenerator(1), withSamples(&samples))
+	if !errors.Is(err, ErrCeiling) {
+		t.Fatalf("got error %v, want ErrCeiling", err)
+	}
+	if res.Ceiling != implicit {
+		t.Errorf("Run enforced a ceiling of %d, want %d", res.Ceiling, implicit)
+	}
+	if first := samples[0].pos; (first >= cursorBuffer) != raceDetector {
+		t.Errorf("baseline at %d bytes of tokens; race detector: %v", first, raceDetector)
+	}
+	res, _ = run(newLeakyScanner, defaultGenerator(1), WithCeiling(1<<10))
+	if res.Ceiling != 1<<10 {
+		t.Errorf("WithCeiling(1 KiB): Run enforced a ceiling of %d", res.Ceiling)
+	}
+}
+
+// TestBaselineRule checks the moved baseline: it is the first sample after
+// the tokens, not the bytes read, have passed the boundary; it follows a
+// custom sampling interval; and a stream too short to give a sample after it
+// fails the run.
+func TestBaselineRule(t *testing.T) {
+	const budget = 96 << 10
+	// A large reader buffer reads far ahead of the tokens.
+	newAheadScanner := func(r io.Reader) *bytescan.Scanner {
+		lx := bytescan.NewWithOptions(bufio.NewReaderSize(r, 2*cursorBuffer), bytescan.WithMaxTokenBytes(TextGuard))
+		addLineRules(lx)
+		return lx
+	}
+
+	var early []samplePoint
+	if _, err := run(newAheadScanner, NewGenerator(1, lineRecord, WithBudget(budget)), WithCeiling(1<<30), withSamples(&early)); err != nil {
+		t.Fatal(err)
+	}
+	if early[0].pos >= cursorBuffer || early[0].read < cursorBuffer {
+		t.Fatalf("without the rule, the first sample is at %d bytes of tokens and %d bytes read; want the reader past %d bytes before the tokens", early[0].pos, early[0].read, cursorBuffer)
+	}
+
+	var moved []samplePoint
+	if _, err := run(newAheadScanner, NewGenerator(1, lineRecord, WithBudget(budget)), WithCeiling(1<<30), withBaselineAfter(cursorBuffer), withSamples(&moved)); err != nil {
+		t.Fatal(err)
+	}
+	every := int64(budget / 16)
+	if first := moved[0].pos; first < cursorBuffer || first >= cursorBuffer+every {
+		t.Fatalf("baseline at %d bytes of tokens, want the first sample at or after %d, before %d", first, cursorBuffer, cursorBuffer+every)
+	}
+	if len(moved) < 2 || len(moved) >= len(early) {
+		t.Fatalf("took %d samples with the rule and %d without", len(moved), len(early))
+	}
+
+	// A custom interval: the baseline is the first sample of that interval
+	// after the boundary, and the samples keep the interval.
+	const interval = 5000
+	var custom []samplePoint
+	if _, err := run(newLineScanner, NewGenerator(1, lineRecord, WithBudget(budget)), WithCeiling(1<<30), WithSampleEvery(interval), withBaselineAfter(cursorBuffer), withSamples(&custom)); err != nil {
+		t.Fatal(err)
+	}
+	if first := custom[0].pos; first < cursorBuffer || first >= cursorBuffer+interval {
+		t.Fatalf("with a %d-byte interval, baseline at %d bytes of tokens, want from %d to %d", interval, first, cursorBuffer, cursorBuffer+interval)
+	}
+	for i := 1; i < len(custom)-1; i++ {
+		if gap := custom[i].pos - custom[i-1].pos; gap <= 0 || gap >= 2*interval {
+			t.Fatalf("samples %d and %d are %d bytes of tokens apart, want about %d", i-1, i, gap, interval)
+		}
+	}
+
+	// Too short: a stream that ends before the boundary, and one with no
+	// sampling interval after it, fail instead of passing unchecked.
+	for _, c := range []struct {
+		name  string
+		src   Source
+		every int64
+	}{
+		{"ends before the boundary", NewGenerator(1, lineRecord, WithBudget(32<<10)), 0},
+		{"no interval after the boundary", NewGenerator(1, lineRecord, WithBudget(96<<10)), 1 << 20},
+	} {
+		_, err := run(newLineScanner, c.src, WithSampleEvery(c.every), withBaselineAfter(cursorBuffer))
+		if err == nil || !strings.Contains(err.Error(), "no growth was checked") || !strings.Contains(err.Error(), "one cursor buffer") {
+			t.Fatalf("%s: got error %v, want the baseline error", c.name, err)
+		}
 	}
 }
 
@@ -384,7 +570,7 @@ func TestLexRetained(t *testing.T) {
 	msg := fails(t, func(tb testing.TB) {
 		LexRetained(tb, bufio.NewReader(bytes.NewReader(input)), 1<<10, leaky)
 	})
-	if !strings.Contains(msg, textreader.ErrRetentionExceeded.Error()) {
+	if !strings.Contains(msg, cursor.ErrRetentionExceeded.Error()) {
 		t.Fatalf("LexRetained without the Release: got %q, want the retention error", msg)
 	}
 }

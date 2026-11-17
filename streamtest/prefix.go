@@ -24,7 +24,8 @@ func Records(seed int64, record RecordFunc, n int) []byte {
 // budget is the length of head plus the budget of src. A test uses it to put
 // a warm-up from Records, or a hand-made record such as one with the largest
 // length a format allows, before a generated stream; the bytes of src then
-// start at the summed length of head.
+// start at the summed length of head. A prefix of a source with the default
+// budget counts as a source with the default budget.
 func Prefix(src Source, head ...[]byte) Source {
 	rs := make([]io.Reader, 0, len(head)+1)
 	n := int64(0)
@@ -32,13 +33,16 @@ func Prefix(src Source, head ...[]byte) Source {
 		rs = append(rs, bytes.NewReader(h))
 		n += int64(len(h))
 	}
-	return prefixed{io.MultiReader(append(rs, src)...), n + src.Budget()}
+	return prefixed{io.MultiReader(append(rs, src)...), n + src.Budget(), usesDefaultBudget(src)}
 }
 
 // prefixed is the Source of Prefix.
 type prefixed struct {
 	io.Reader
-	budget int64
+	budget  int64
+	implied bool // src uses the default budget
 }
 
 func (p prefixed) Budget() int64 { return p.budget }
+
+func (p prefixed) usesDefaultBudget() bool { return p.implied }

@@ -94,21 +94,29 @@ another's. Context within one token needs no mode; see scenario 3 under
 ## Byte reads (`bytesource`)
 
 **Current contract — byte streams.** The public package `bytesource` is the
-byte adapter: its cursor reads each byte of the input as one rune, U+0000 to
-U+00FF, so `Offset()`, `RuneOffset()` and `Len()` of a token are byte offsets
-and byte lengths in the input. With the current cursor, `ByteOffset()` and
-`Span().Bytes()` count the UTF-8 encoding of those runes and `Line()` and
-`Column()` advance at every 0x0A byte, so they are not positions in the input;
-this is a limit of the current implementation. The owner chose a byte mode in
-`textreader` to remove it (option A; see the
-[decision log](design-principles.md#owner-decisions)). A driver reads a
+byte adapter: `bytesource.NewCursor` returns a byte-mode cursor
+(`cursor.NewByteReader` of `bytescan/cursor`) that reads each byte of the input
+as one rune, U+0000 to U+00FF, of size 1, and reports file positions.
+`Offset()`, `RuneOffset()` and `ByteOffset()` of a token are its file offset,
+and `Len()` and `Span().Bytes()` are its length in bytes. The byte 0x0A ends a
+line and `Column()` counts the bytes since the last 0x0A, so `Line()` and
+`Column()` also locate a byte in the input. A token guard
+(`WithMaxTokenBytes`) counts one for each byte, and `Context` returns the raw
+bytes of the input. This is option A of the
+[decision log](design-principles.md#owner-decisions). A cursor built with
+`cursor.NewRuneReader` over `bytesource.NewReader` keeps the limits of the
+rune path: it encodes the runes as UTF-8, so its `ByteOffset()`,
+`Span().Bytes()` and guards count a byte of 0x80 or above twice. A driver reads a
 field whose length is in the data with `bytesource.Fields`, whole or in pieces
 of at most `MaxPiece` bytes; the queue is stepped with `NextField` and is not a
 `Source`. The rules that match byte values are in `rules/octet`; see
 [Construction capabilities](composition.md#construction-capabilities).
 
 **Evidence.** `bytesource/bytesource.go`, `bytesource/fields.go`;
-`TestOffsets`, `TestFields`, `TestFieldsNotSource`, `TestFieldsChunked` and
+`TestOffsets`, `TestHighBytePositions`, `TestHighByteGuard`,
+`TestByteLineColumn`, `TestByteContext`, `TestLexRetainedBytes`
+(`bytesource/bytemode_test.go`),
+`TestFields`, `TestFieldsNotSource`, `TestFieldsChunked` and
 `TestFieldsHugeDeclaredLength` (`bytesource/bytesource_test.go`,
 `bytesource/fields_test.go`); `ExampleFields` (`bytesource/example_test.go`).
 

@@ -47,9 +47,9 @@ the [README](../../README.md#example-binary).
   own, so a delimiter after a lone ESC still ends the frame.
 - **Do not unescape in the scanner.** The consumer turns `ESC_END` into C0 and
   `ESC_ESC` into DB when it rebuilds the packet.
-- **The guard counts a byte of 0x80 or above as two bytes** with the current
-  cursor. Set it to twice the largest token in bytes
-  ([operations.md](operations.md)).
+- **The guard counts bytes.** On a `bytesource.NewCursor` cursor every byte,
+  0x80 or above too, counts one, so set the guard a little above the largest
+  token in bytes ([operations.md](operations.md)).
 
 ## Tests to write
 

@@ -11,8 +11,8 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	"github.com/xiam/bytescan"
+	"github.com/xiam/bytescan/cursor"
 	"github.com/xiam/bytescan/rules/core"
-	"github.com/xiam/textreader"
 )
 
 // tokenKeys projects tokens onto the fields a NewTokenFromString-built
@@ -239,7 +239,7 @@ func TestScannerMaxTokenBytes(t *testing.T) {
 		lex, err := lx.Next()
 		require.Error(t, err)
 		assert.Nil(t, lex)
-		assert.ErrorIs(t, err, textreader.ErrRetentionExceeded)
+		assert.ErrorIs(t, err, cursor.ErrRetentionExceeded)
 	})
 }
 
@@ -278,12 +278,12 @@ func TestScannerContext(t *testing.T) {
 
 	_, err = lx.Context(first, 0, 0)
 	require.Error(t, err)
-	assert.ErrorIs(t, err, textreader.ErrPositionOutOfBuffer)
+	assert.ErrorIs(t, err, cursor.ErrPositionOutOfBuffer)
 }
 
 // TestScannerNewWithCursor checks the cursor-injection constructor.
 func TestScannerNewWithCursor(t *testing.T) {
-	cur := textreader.NewReader(strings.NewReader("ab\ncd"))
+	cur := cursor.NewReader(strings.NewReader("ab\ncd"))
 
 	lx := bytescan.NewWithCursor(cur)
 	lx.MustAddRule(lexTypeWord, newASCIILettersRule())
@@ -310,19 +310,19 @@ func TestScannerNewWithCursorOptionsMaxTokenBytes(t *testing.T) {
 	run := core.RuneRun(core.RuneSet("x"))
 
 	t.Run("with the option", func(t *testing.T) {
-		cur := textreader.New(strings.NewReader(input))
+		cur := cursor.New(strings.NewReader(input))
 		lx := bytescan.NewWithCursorOptions(cur, bytescan.WithMaxTokenBytes(16))
 		lx.MustAddRule(lexTypeWord, run)
 
 		lex, err := lx.Next()
 		require.Error(t, err)
 		assert.Nil(t, lex)
-		assert.ErrorIs(t, err, textreader.ErrRetentionExceeded)
+		assert.ErrorIs(t, err, cursor.ErrRetentionExceeded)
 		assert.Equal(t, 0, cur.Cursor().ByteOffset(), "a failed Next consumes nothing")
 	})
 
 	t.Run("without the option", func(t *testing.T) {
-		cur := textreader.New(strings.NewReader(input))
+		cur := cursor.New(strings.NewReader(input))
 		lx := bytescan.NewWithCursor(cur)
 		lx.MustAddRule(lexTypeWord, run)
 
@@ -334,20 +334,20 @@ func TestScannerNewWithCursorOptionsMaxTokenBytes(t *testing.T) {
 	t.Run("cursor budget below the bound", func(t *testing.T) {
 		// The scanner does not size a caller-owned cursor, so the cursor's own
 		// retention budget fails the token before the per-token bound does.
-		cur := textreader.NewReader(strings.NewReader(input), textreader.WithMaxRetained(8))
+		cur := cursor.NewReader(strings.NewReader(input), cursor.WithMaxRetained(8))
 		lx := bytescan.NewWithCursorOptions(cur, bytescan.WithMaxTokenBytes(64))
 		lx.MustAddRule(lexTypeWord, run)
 
 		lex, err := lx.Next()
 		require.Error(t, err)
 		assert.Nil(t, lex)
-		assert.ErrorIs(t, err, textreader.ErrRetentionExceeded)
+		assert.ErrorIs(t, err, cursor.ErrRetentionExceeded)
 		assert.NotErrorIs(t, err, bytescan.ErrTokenTooLarge, "the cursor's budget fails first, not the scanner's bound")
 		assert.Equal(t, 0, cur.Cursor().ByteOffset(), "a failed Next consumes nothing")
 	})
 
 	t.Run("no options", func(t *testing.T) {
-		cur := textreader.New(strings.NewReader(input))
+		cur := cursor.New(strings.NewReader(input))
 		lx := bytescan.NewWithCursorOptions(cur)
 		lx.MustAddRule(lexTypeWord, run)
 
@@ -361,7 +361,7 @@ func TestScannerNewWithCursorOptionsMaxTokenBytes(t *testing.T) {
 // cursor each enforce their own WithMaxTokenBytes bound. The driver releases
 // the outgoing scanner at every switch, as a mode driver does.
 func TestScannerSharedCursorPerScannerMaxTokenBytes(t *testing.T) {
-	cur := textreader.New(strings.NewReader("xxxxxxxx xx " + strings.Repeat("x", 20)))
+	cur := cursor.New(strings.NewReader("xxxxxxxx xx " + strings.Repeat("x", 20)))
 
 	newScanner := func(n int) *bytescan.Scanner {
 		lx := bytescan.NewWithCursorOptions(cur, bytescan.WithMaxTokenBytes(n))
@@ -385,7 +385,7 @@ func TestScannerSharedCursorPerScannerMaxTokenBytes(t *testing.T) {
 		t.Helper()
 		require.Error(t, err)
 		assert.Nil(t, lex)
-		assert.ErrorIs(t, err, textreader.ErrRetentionExceeded)
+		assert.ErrorIs(t, err, cursor.ErrRetentionExceeded)
 		assert.ErrorIs(t, err, bytescan.ErrTokenTooLarge)
 	}
 

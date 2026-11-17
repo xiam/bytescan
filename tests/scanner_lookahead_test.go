@@ -8,7 +8,7 @@ import (
 	"github.com/stretchr/testify/require"
 
 	"github.com/xiam/bytescan"
-	"github.com/xiam/textreader"
+	"github.com/xiam/bytescan/cursor"
 )
 
 // The tests in this file check lookahead built from pushback: multi-symbol and
@@ -375,7 +375,7 @@ func TestLookaheadUnboundedReadAheadHitsByteBound(t *testing.T) {
 			lex, err := lx.Next()
 			require.Error(t, err)
 			assert.Nil(t, lex)
-			assert.ErrorIs(t, err, textreader.ErrRetentionExceeded)
+			assert.ErrorIs(t, err, cursor.ErrRetentionExceeded)
 		}
 
 		// A failed Next consumes nothing, so the retry fails the same way. Had

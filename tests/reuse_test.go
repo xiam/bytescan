@@ -8,7 +8,7 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	"github.com/xiam/bytescan"
-	"github.com/xiam/textreader"
+	"github.com/xiam/bytescan/cursor"
 )
 
 // TestScannerMarkReuseLongSequence covers a long stream of tokens on a finite
@@ -23,8 +23,8 @@ func TestScannerMarkReuseLongSequence(t *testing.T) {
 	// Budget is exactly the window: three committed tokens plus the in-flight
 	// token, each one byte. A fifth active mark would push the retained region
 	// to five bytes and trip the limit.
-	cur := textreader.NewReader(strings.NewReader(strings.Repeat("a", n)),
-		textreader.WithMaxRetained(4))
+	cur := cursor.NewReader(strings.NewReader(strings.Repeat("a", n)),
+		cursor.WithMaxRetained(4))
 
 	lx := bytescan.NewWithCursor(cur)
 	lx.MustAddRule(lexTypeWord, newExactRuneRule('a'))
@@ -64,7 +64,7 @@ func TestScannerMarkEvictionExact(t *testing.T) {
 	}
 	for i := 0; i < 8; i++ {
 		_, err := lx.Context(lexes[i], 0, 0)
-		assert.ErrorIs(t, err, textreader.ErrPositionOutOfBuffer,
+		assert.ErrorIs(t, err, cursor.ErrPositionOutOfBuffer,
 			"token %d (%q) has fallen out of the window", i, lexes[i].Text())
 	}
 
@@ -85,7 +85,7 @@ func TestScannerMarkEvictionExact(t *testing.T) {
 // mark or corrupting the window.
 func TestScannerMarkReuseAfterFailures(t *testing.T) {
 	// "ccccc" grows past the budget while "ab " is committed.
-	cur := textreader.NewReader(strings.NewReader("ab ccccc"), textreader.WithMaxRetained(6))
+	cur := cursor.NewReader(strings.NewReader("ab ccccc"), cursor.WithMaxRetained(6))
 
 	lx := bytescan.NewWithCursor(cur)
 	lx.MustAddRule(lexTypeWord, newASCIILettersRule())
@@ -106,7 +106,7 @@ func TestScannerMarkReuseAfterFailures(t *testing.T) {
 		lex, err := lx.Next()
 		require.Error(t, err)
 		assert.Nil(t, lex)
-		assert.ErrorIs(t, err, textreader.ErrRetentionExceeded)
+		assert.ErrorIs(t, err, cursor.ErrRetentionExceeded)
 
 		ctx, err := lx.Context(second, 0, 0)
 		require.NoError(t, err)
@@ -138,7 +138,7 @@ func TestScannerMarkReuseAfterRelease(t *testing.T) {
 	// more.
 	for i := 0; i < 6; i++ {
 		_, err := lx.Context(lexes[i], 0, 0)
-		assert.ErrorIs(t, err, textreader.ErrPositionOutOfBuffer, "token %d must be dropped by Release", i)
+		assert.ErrorIs(t, err, cursor.ErrPositionOutOfBuffer, "token %d must be dropped by Release", i)
 	}
 
 	// Further tokens still lex. Release left every slot holding a released
@@ -154,7 +154,7 @@ func TestScannerMarkReuseAfterRelease(t *testing.T) {
 	// the two oldest post-Release marks (d, " ") are evicted.
 	for i := 6; i < 8; i++ {
 		_, err := lx.Context(lexes[i], 0, 0)
-		assert.ErrorIs(t, err, textreader.ErrPositionOutOfBuffer, "token %d is evicted", i)
+		assert.ErrorIs(t, err, cursor.ErrPositionOutOfBuffer, "token %d is evicted", i)
 	}
 	for i := 8; i < 11; i++ {
 		_, err := lx.Context(lexes[i], 0, 0)
@@ -166,21 +166,21 @@ func TestScannerMarkReuseAfterRelease(t *testing.T) {
 	assert.Equal(t, "e f", ctx, "the window is restored around the new tokens")
 }
 
-// plainCursor wraps a *textreader.TextReader and exposes only the four-method
+// plainCursor wraps a *cursor.Reader and exposes only the four-method
 // Cursor interface — deliberately not the Remark capability. It models an
 // injected cursor without reuse support, which must keep the existing
 // allocating behavior.
 type plainCursor struct {
-	inner *textreader.TextReader
+	inner *cursor.Reader
 }
 
-func (p *plainCursor) ReadLocatedRune() (textreader.LocatedRune, error) {
+func (p *plainCursor) ReadLocatedRune() (cursor.LocatedRune, error) {
 	return p.inner.ReadLocatedRune()
 }
 
-func (p *plainCursor) Cursor() textreader.Pos { return p.inner.Cursor() }
+func (p *plainCursor) Cursor() cursor.Pos { return p.inner.Cursor() }
 
-func (p *plainCursor) Checkpoint() *textreader.Checkpoint {
+func (p *plainCursor) Checkpoint() *cursor.Checkpoint {
 	return p.inner.Checkpoint()
 }
 
@@ -196,7 +196,7 @@ func TestScannerMarkFallbackWithoutRemark(t *testing.T) {
 	const input = "a b c d e f g h"
 
 	newFallback := func() *bytescan.Scanner {
-		lx := bytescan.NewWithCursor(&plainCursor{inner: textreader.NewReader(strings.NewReader(input))})
+		lx := bytescan.NewWithCursor(&plainCursor{inner: cursor.NewReader(strings.NewReader(input))})
 		lx.MustAddRule(lexTypeWord, newASCIILettersRule())
 		lx.MustAddRule(lexTypeSpace, newSpaceRule())
 		return lx
@@ -280,7 +280,7 @@ var modeSwitchInput = strings.Repeat("ab ", 4096)
 // allocation more than a switch without it.
 func TestScannerReleaseOnSwitchAllocatesNoCheckpoint(t *testing.T) {
 	measure := func(release bool) float64 {
-		d := newModeSwitchDriver(textreader.NewReader(strings.NewReader(modeSwitchInput)), release)
+		d := newModeSwitchDriver(cursor.NewReader(strings.NewReader(modeSwitchInput)), release)
 
 		// Warm up past the first pass over the mark slots of both scanners, so
 		// every slot holds a checkpoint value.
@@ -303,7 +303,7 @@ func TestScannerReleaseOnSwitchAllocatesNoCheckpoint(t *testing.T) {
 // every switch: each Release still returns every checkpoint the scanner holds to
 // the cursor, so the cursor retains nothing after it, as with a fresh scanner.
 func TestScannerReleaseOnSwitchRetention(t *testing.T) {
-	cur := textreader.NewReader(strings.NewReader(modeSwitchInput))
+	cur := cursor.NewReader(strings.NewReader(modeSwitchInput))
 	d := newModeSwitchDriver(cur, false)
 
 	for i := 0; i < 16; i++ {
@@ -338,8 +338,8 @@ func TestScannerReleaseOnSwitchWithoutRemark(t *testing.T) {
 		return got
 	}
 
-	plain := lexCycles(&plainCursor{inner: textreader.NewReader(strings.NewReader(modeSwitchInput))})
-	reuse := lexCycles(textreader.NewReader(strings.NewReader(modeSwitchInput)))
+	plain := lexCycles(&plainCursor{inner: cursor.NewReader(strings.NewReader(modeSwitchInput))})
+	reuse := lexCycles(cursor.NewReader(strings.NewReader(modeSwitchInput)))
 	assert.Equal(t, reuse, plain, "a cursor without the Remark capability must lex identically")
 	assert.Equal(t, "WORD:ab", plain[0])
 	assert.Equal(t, "SPACE: ", plain[1])
@@ -352,8 +352,8 @@ func TestScannerReleaseOnSwitchWithoutRemark(t *testing.T) {
 		return testing.AllocsPerRun(200, func() { d.cycle(t) })
 	}
 
-	fbAllocs := measure(&plainCursor{inner: textreader.NewReader(strings.NewReader(modeSwitchInput))})
-	reAllocs := measure(textreader.NewReader(strings.NewReader(modeSwitchInput)))
+	fbAllocs := measure(&plainCursor{inner: cursor.NewReader(strings.NewReader(modeSwitchInput))})
+	reAllocs := measure(cursor.NewReader(strings.NewReader(modeSwitchInput)))
 	assert.Greater(t, fbAllocs, reAllocs,
 		"a cursor without the Remark capability must still allocate a checkpoint per token (fallback=%v, reuse=%v)",
 		fbAllocs, reAllocs)
@@ -370,7 +370,7 @@ func BenchmarkModeSwitch(b *testing.B) {
 		b.Run(name, func(b *testing.B) {
 			b.ReportAllocs()
 			input := strings.Repeat("ab ", b.N+1)
-			d := newModeSwitchDriver(textreader.NewReader(strings.NewReader(input)), release)
+			d := newModeSwitchDriver(cursor.NewReader(strings.NewReader(input)), release)
 			scanners := []*bytescan.Scanner{d.words, d.spaces}
 
 			b.ResetTimer()

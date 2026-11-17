@@ -31,7 +31,7 @@ transitions a rule returns. The state itself is the rule's: it is the `Rule`
 value the rule returns, and the VM holds it only as per-token bookkeeping.
 
 Reading, buffering, positions, and replay are owned by the positioned cursor
-(`github.com/xiam/textreader`). The cursor decodes UTF-8, tracks the logical
+(`github.com/xiam/bytescan/cursor`). The cursor decodes UTF-8, tracks the logical
 position, retains the input a checkpoint needs, and restores a marked position
 exactly.
 
@@ -104,7 +104,9 @@ expose byte offset, rune offset, line, and rune column:
 `Token` shorthands `ByteOffset()`, `RuneOffset()`, `Line()`, `Column()` all
 report the **start**. `Offset()` is the long-standing accessor that counts
 **runes** and equals `RuneOffset()`; use `ByteOffset()` when bytes are what you
-need. `Len()` equals `Span().Runes()` for a scanner-produced token.
+need. `Len()` equals `Span().Runes()` for a scanner-produced token. On a
+byte-mode cursor every rune is one byte, so these coordinates are file
+positions; see [Byte versus rune units](#byte-versus-rune-units).
 
 Spans are **committed, not speculative**: a span covers exactly the winning
 match, never the furthest point the rules read ahead to. A rule that looks ahead
@@ -116,7 +118,7 @@ Span().Runes` and `Offset == RuneOffset`); `TestScannerSpanIsCommittedNotSpecula
 (a rule that reads one symbol past its match still commits a 1-byte span per
 token); `TestScannerRuneReaderSourceSpans` (rune-only source yields correct byte,
 rune, line, and column coordinates). Source: the commit block of
-`Scanner.nextToken` (`bytescan.go`) and `Span`/`Pos` in `textreader`.
+`Scanner.nextToken` (`bytescan.go`) and `Span`/`Pos` in `bytescan/cursor`.
 
 ## Token constructors and the manual-constructor exception
 
@@ -166,8 +168,17 @@ A multi-byte rune occupies several bytes but one rune and one column. `héllo`
 is 5 runes in 6 bytes and 5 columns. `Span().Bytes()` and `Span().Runes()` give
 the two widths; they differ exactly by the extra bytes of multi-byte runes.
 
-A byte stream read through `bytesource` has its own units; see
-[Byte reads](layers.md#byte-reads-bytesource).
+**Current contract — byte cursor.** On a byte-mode cursor
+(`bytesource.NewCursor`, which is `cursor.NewByteReader`) each byte of the
+input is one rune of size 1. Byte and rune offsets are both the file offset,
+`Span().Bytes()`, `Span().Runes()` and `Len()` are all the length in bytes,
+columns count bytes since the last 0x0A, and `WithMaxTokenBytes` counts one
+for each byte. A cursor built with `cursor.NewRuneReader` over
+`bytesource.NewReader` encodes the runes as UTF-8 instead: its byte units count
+a byte of 0x80 or above as two bytes. See
+[Byte reads](layers.md#byte-reads-bytesource). **Evidence.**
+`TestHighBytePositions`, `TestHighByteGuard` and `TestByteLineColumn`
+(`bytesource/bytemode_test.go`).
 
 **Open design question 4.** Whether the core should also expose a
 grapheme-cluster coordinate. Columns are currently rune columns, not grapheme
@@ -179,7 +190,7 @@ columns; see [open questions](open-questions.md#question-4).
 are **0-based rune columns** (the first rune of a line is column 0). A `\n` ends
 the current line; the next rune is on the next line at column 0. `\r` does not,
 by itself, start a new line in the column accounting the way `\n` does — the
-cursor's line/column tracking is defined by `textreader` and is the authority
+cursor's line/column tracking is defined by `bytescan/cursor` and is the authority
 here.
 
 **Evidence.** `TestScannerTokenSpans` asserts a token on the second line has
@@ -213,9 +224,12 @@ current authority.
   context window (the three most recent committed tokens, `markWindow`). Once
   enough later tokens commit and push `tok` out of that window, its retained
   input is released and `Context` returns
-  `textreader.ErrPositionOutOfBuffer`. A call that commits nothing — a failed
+  `cursor.ErrPositionOutOfBuffer`. A call that commits nothing — a failed
   `Next`, or the final EOF probe — releases nothing, so a token's context
-  survives a failed call and an EOF probe.
+  survives a failed call and an EOF probe. `before` and `after` count bytes.
+  On a byte-mode cursor the context is the raw input bytes, not the runes of
+  `Text()`: `bytesource.Text` of it compares with `Text()` (evidence:
+  `TestByteContext`, `bytesource/bytemode_test.go`).
 
 So: the *facts about* a token (its span, type, text) live forever; the *raw
 text around* a token lives only as long as the window retains it. A consumer
@@ -225,7 +239,7 @@ that needs surrounding text for a token much later must have captured it with
 **Mark ownership.** The engine keeps a fixed pool of checkpoint slots — one per
 token the window retains, plus the token currently being assembled — rather
 than allocating a fresh checkpoint for every token. When the cursor can re-arm
-a released checkpoint (the `Remark` capability shipped in `textreader`), a
+a released checkpoint (the `Remark` capability of `cursor.Reader`), a
 committed token's slot is released and the next token re-arms that same slot in
 place, so the number of live checkpoints is bounded by the window and
 steady-state tokenization allocates no checkpoint. A failed `Next` and the EOF
@@ -288,7 +302,7 @@ capability lexes identically but still allocates a checkpoint per token).
   | `ErrEmptyRuleType` | `AddRule` | the `TokenType` is `""` |
   | `ErrNilRule` | `AddRule` | the rule is `nil` |
   | `ErrNoRules` | `Next` | no rule is registered |
-  | `ErrTokenTooLarge` | `Next` | a token would exceed `WithMaxTokenBytes`; the same error also matches `textreader.ErrRetentionExceeded` |
+  | `ErrTokenTooLarge` | `Next` | a token would exceed `WithMaxTokenBytes`; the same error also matches `cursor.ErrRetentionExceeded` |
   | `ErrInternal` | `Next` | a defensive engine check fails; not expected |
   | `ErrNilToken` | `Context` | the token is `nil` |
   | `ErrContextUnsupported` | `Context` | the cursor does not expose retained text |
@@ -302,10 +316,10 @@ capability lexes identically but still allocates a checkpoint per token).
     the cursor, is wrapped with `%w`, so `errors.Is` matches the original
     error.
   - A token that exceeds the cursor's own retention budget
-    (`textreader.WithMaxRetained`) matches `textreader.ErrRetentionExceeded`
+    (`cursor.WithMaxRetained`) matches `cursor.ErrRetentionExceeded`
     and not `ErrTokenTooLarge`.
   - An error from the cursor's `Context`, such as
-    `textreader.ErrPositionOutOfBuffer`, is returned unchanged.
+    `cursor.ErrPositionOutOfBuffer`, is returned unchanged.
   - `Release` cannot fail, and the scanner stays usable after it.
 
 **Evidence.** `TestScannerErrorIdentities` (each sentinel, plain `io.EOF` before
@@ -413,7 +427,7 @@ malformed region should work from the span (byte offsets into the source), not
 from `Text()`. **Mapped to:** `TestReadSymbolSizes` (`symbol_internal_test.go`:
 an invalid byte is read without an error as one symbol of size 1). The U+FFFD
 text and the span of the resulting token are stated in the godoc of
-`Scanner.Next` and come from the UTF-8 decoding of `textreader`; **no test
+`Scanner.Next` and come from the UTF-8 decoding of `bytescan/cursor`; **no test
 yet**.
 
 **Rune-only source.** A source that implements only `io.RuneReader` (no
@@ -422,7 +436,7 @@ in its buffer. Byte offsets therefore describe the **UTF-8 encoding of the rune
 stream the caller's reader represents**, not any physical byte layout the caller
 might have had. Coordinates (byte, rune, line, column) are all still consistent
 and correct. **Mapped to:** `TestScannerRuneReaderSourceSpans` and the
-`NewRuneReader` path in `textreader`.
+`NewRuneReader` path in `bytescan/cursor`.
 
 **Coverage gap (question 14).** There is no committed test asserting the exact
 `Text()`/span relationship for a **trailing incomplete** multi-byte sequence at

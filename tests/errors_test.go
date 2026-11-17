@@ -9,14 +9,14 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	"github.com/xiam/bytescan"
-	"github.com/xiam/textreader"
+	"github.com/xiam/bytescan/cursor"
 )
 
 // TestScannerErrorIdentities checks how each error the root package returns is
 // matched. A failure that the package decides matches its exported sentinel
 // with errors.Is. An error that the package does not decide keeps its
 // identity: the end of input is io.EOF itself, and an error from the reader,
-// the cursor or textreader still matches the original error.
+// the cursor still matches the original error.
 func TestScannerErrorIdentities(t *testing.T) {
 	letters := func(input string) *bytescan.Scanner {
 		lx := bytescan.New(strings.NewReader(input))
@@ -76,7 +76,7 @@ func TestScannerErrorIdentities(t *testing.T) {
 		{
 			name: "Context on a cursor without retained text",
 			run: func(t *testing.T) error {
-				lx := bytescan.NewWithCursor(&plainCursor{inner: textreader.NewReader(strings.NewReader("abc"))})
+				lx := bytescan.NewWithCursor(&plainCursor{inner: cursor.NewReader(strings.NewReader("abc"))})
 				lx.MustAddRule(lexTypeWord, newASCIILettersRule())
 				lex, err := lx.Next()
 				require.NoError(t, err)
@@ -118,24 +118,24 @@ func TestScannerErrorIdentities(t *testing.T) {
 				_, err := lx.Next()
 				return err
 			},
-			is: []error{bytescan.ErrTokenTooLarge, textreader.ErrRetentionExceeded},
+			is: []error{bytescan.ErrTokenTooLarge, cursor.ErrRetentionExceeded},
 		},
 		{
 			name: "token over the cursor's retention budget",
 			run: func(t *testing.T) error {
-				cur := textreader.NewReader(strings.NewReader("abcdef"), textreader.WithMaxRetained(3))
+				cur := cursor.NewReader(strings.NewReader("abcdef"), cursor.WithMaxRetained(3))
 				lx := bytescan.NewWithCursor(cur)
 				lx.MustAddRule(lexTypeWord, newASCIILettersRule())
 				_, err := lx.Next()
 				return err
 			},
-			is:    []error{textreader.ErrRetentionExceeded},
+			is:    []error{cursor.ErrRetentionExceeded},
 			isNot: []error{bytescan.ErrTokenTooLarge},
 		},
 		{
 			name: "injected cursor error",
 			run: func(t *testing.T) error {
-				cur := &transientCursor{TextReader: textreader.NewReader(strings.NewReader("abc")), failAt: 1}
+				cur := &transientCursor{Reader: cursor.NewReader(strings.NewReader("abc")), failAt: 1}
 				lx := bytescan.NewWithCursor(cur)
 				lx.MustAddRule(lexTypeWord, newASCIILettersRule())
 				_, err := lx.Next()
@@ -144,7 +144,7 @@ func TestScannerErrorIdentities(t *testing.T) {
 			is: []error{errTransient},
 		},
 		{
-			name: "Context error from textreader",
+			name: "Context error from the cursor",
 			run: func(t *testing.T) error {
 				lx := letters("abc")
 				lex, err := lx.Next()
@@ -153,7 +153,7 @@ func TestScannerErrorIdentities(t *testing.T) {
 				_, err = lx.Context(lex, 0, 0)
 				return err
 			},
-			is: []error{textreader.ErrPositionOutOfBuffer},
+			is: []error{cursor.ErrPositionOutOfBuffer},
 		},
 	}
 

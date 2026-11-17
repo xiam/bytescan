@@ -1,6 +1,6 @@
 package bytescan
 
-import "github.com/xiam/textreader"
+import "github.com/xiam/bytescan/cursor"
 
 // Source is anything that yields tokens one at a time: a *Scanner, or a
 // filter or driver in a layer above Next.
@@ -76,6 +76,6 @@ func (f *skipFilter) skips(t TokenType) bool {
 // A filter uses it for a synthetic token that stands for no input, such as an
 // inserted semicolon or an INDENT. The scanner itself never returns an empty
 // token.
-func NewEmptyToken(typ TokenType, pos textreader.Pos) *Token {
-	return NewTokenWithSpan(typ, nil, textreader.NewSpan(pos, pos))
+func NewEmptyToken(typ TokenType, pos cursor.Pos) *Token {
+	return NewTokenWithSpan(typ, nil, cursor.NewSpan(pos, pos))
 }
