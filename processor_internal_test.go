@@ -1,4 +1,4 @@
-package textlexer
+package bytescan
 
 import (
 	"testing"
@@ -8,7 +8,7 @@ import (
 
 // These tests call rulesProcessor.Process directly. Through Next, a zero-length
 // match and a rule that matched nothing both become the same single-rune
-// UNKNOWN lexeme (textlexer.go:482-485 and processor.go:69-71), so only Process
+// UNKNOWN token (bytescan.go:555-558 and processor.go:69-71), so only Process
 // shows which path a token took.
 
 // Every rule in this file is an engine probe: it exists to drive one path of
@@ -17,8 +17,8 @@ import (
 
 // excludeLast returns the verdict of a rule that excludes the last n symbols
 // (n >= 1) from its match and then ends the pushback chain with (nil, s). It is
-// the internal-package copy of the shared helper in textlexer_test.go, which
-// this package cannot import.
+// the internal-package copy of the shared helper in tests/scanner_rules_test.go,
+// which this package cannot import.
 func excludeLast(n int, s State) (Rule, State) {
 	if n < 1 {
 		panic("excludeLast: n must be at least 1")
@@ -40,10 +40,10 @@ func pushBackChain(n int, s State) Rule {
 
 // processInput feeds input and then the EOF symbol to a processor with the one
 // rule typ, and returns the first settled Process result.
-func processInput(t *testing.T, typ LexemeType, rule Rule, input string) (LexemeType, int) {
+func processInput(t *testing.T, typ TokenType, rule Rule, input string) (TokenType, int) {
 	t.Helper()
 
-	rp := newRulesProcessor([]LexemeType{typ}, map[LexemeType]Rule{typ: rule})
+	rp := newRulesProcessor([]TokenType{typ}, map[TokenType]Rule{typ: rule})
 	for _, r := range input {
 		if got, n := rp.Process(NewSymbol(r, FlagNone)); n >= 0 {
 			return got, n
@@ -63,12 +63,12 @@ func processInput(t *testing.T, typ LexemeType, rule Rule, input string) (Lexeme
 func TestProcessPushBackAtEOF(t *testing.T) {
 	for _, tc := range []struct {
 		pushbacks int
-		wantType  LexemeType
+		wantType  TokenType
 		wantLen   int
 	}{
 		{1, "R", 1},
 		{2, "R", 0},
-		{3, LexemeTypeUnknown, 1},
+		{3, TokenTypeUnknown, 1},
 	} {
 		// Engine probe: two and three pushbacks exclude more than the match
 		// on purpose (breaks practices 1, 2 and 6).
@@ -91,20 +91,20 @@ func TestProcessPushBackAtEOF(t *testing.T) {
 }
 
 // TestProcessZeroLengthMatch: one pushback to an acceptor on the first symbol is
-// a zero-length match of the rule's own type, which nextLexeme turns into one
-// UNKNOWN rune (textlexer.go:482-485). Two pushbacks on the first symbol pass
+// a zero-length match of the rule's own type, which nextToken turns into one
+// UNKNOWN rune (bytescan.go:555-558). Two pushbacks on the first symbol pass
 // the bottom of the stack instead, and Process reports no match.
 func TestProcessZeroLengthMatch(t *testing.T) {
 	// Engine probes: an empty match, and a chain past the bottom of the
 	// stack, on purpose (breaks practices 2 and 6).
 	zeroLength := func(Symbol) (Rule, State) { return excludeLast(1, StateAccept) }
 	gotType, gotLen := processInput(t, "Z", zeroLength, "a")
-	assert.Equal(t, LexemeType("Z"), gotType)
+	assert.Equal(t, TokenType("Z"), gotType)
 	assert.Equal(t, 0, gotLen)
 
 	overPush := func(Symbol) (Rule, State) { return excludeLast(2, StateAccept) }
 	gotType, gotLen = processInput(t, "Z", overPush, "a")
-	assert.Equal(t, LexemeTypeUnknown, gotType)
+	assert.Equal(t, TokenTypeUnknown, gotType)
 	assert.Equal(t, 1, gotLen)
 }
 
@@ -129,10 +129,10 @@ func TestProcessDecidesOnEOFSymbol(t *testing.T) {
 	for _, tc := range []struct {
 		name     string
 		rule     Rule
-		wantType LexemeType
+		wantType TokenType
 		wantLen  int
 	}{
-		{"still active, no accept", alwaysContinue, LexemeTypeUnknown, 1},
+		{"still active, no accept", alwaysContinue, TokenTypeUnknown, 1},
 		{"accepts the EOF symbol after accepting a", alwaysAccept, "R", 1},
 		{"invalid State on the EOF symbol after accepting a", invalidOnEOF, "R", 1},
 	} {
@@ -145,7 +145,8 @@ func TestProcessDecidesOnEOFSymbol(t *testing.T) {
 // TestCallRule: callRule passes a returned verdict through unchanged, an
 // invalid State and a non-nil next included, and turns a panic with any value
 // into (nil, StateReject). The VM's reaction to these verdicts is tested
-// through Next in textlexer_test.go.
+// through Next in tests/scanner_rule_states_test.go and
+// tests/scanner_panic_test.go.
 func TestCallRule(t *testing.T) {
 	sym := NewSymbol('a', FlagNone)
 

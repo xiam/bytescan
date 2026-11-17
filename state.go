@@ -1,4 +1,4 @@
-package textlexer
+package bytescan
 
 import "fmt"
 
@@ -32,7 +32,8 @@ const (
 	// Rule with that symbol in the same step. 'next' may return StatePushBack
 	// again to exclude one more symbol toward the token start; such a chain
 	// gives a rule multi-symbol lookahead and must end in (nil, StateAccept) or
-	// StateReject. See "Rule states and pushback" in docs/specs/core-contract.md.
+	// StateReject. See "Rule states and pushback" in
+	// docs/specs/rule-vm-contract.md.
 	StatePushBack
 )
 
@@ -43,6 +44,8 @@ var stateNames = map[State]string{
 	StatePushBack: "PUSHBACK",
 }
 
+// String returns the name of s: CONTINUE, ACCEPT, REJECT or PUSHBACK, or
+// UnknownState(n) for a value outside the four constants.
 func (s State) String() string {
 	if name, ok := stateNames[s]; ok {
 		return name

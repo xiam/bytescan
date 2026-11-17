@@ -1,0 +1,7 @@
+# Gitleaks configuration for this repository.
+#
+# Use the default Gitleaks rules and allowlist unchanged. No path, rule or
+# finding is exempted here.
+
+[extend]
+useDefault = true
