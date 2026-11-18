@@ -29,6 +29,7 @@ specification rather than against behavior.
 | [Layers above `Next()`](layers.md) | `Source` and filters, synthetic tokens, lexical modes (`modes`), byte reads (`bytesource`), the core/extension boundary, post-match actions, and no-match handling |
 | [Design principles and decision log](design-principles.md) | The five VM design principles with the engine's conformance, owner decisions, closed questions, and the history of the known deviations |
 | [Open design questions](open-questions.md) | Every open question with its constraint, numbered |
+| [Cursor contract](cursor.md) | The positioned cursor `bytescan/cursor`: positions, checkpoints and replay, retention and its bound, checkpoint reuse, rune sources, byte mode, and the limits of the basic reader |
 
 ## Status convention
 
@@ -106,7 +107,9 @@ the rule tools that have not shipped: named rules that can be referenced by
 name, and post-match actions, so that a consumer can describe a scanner
 declaratively in native Go instead of hand-rolling automata. See
 [Construction capabilities](composition.md#construction-capabilities) and
-[Post-match actions](layers.md#post-match-actions).
+[Post-match actions](layers.md#post-match-actions). Whether a declarative
+frontend, such as a schema- or table-driven one, should compile down to the
+same engine is [open question 15](open-questions.md#question-15).
 **Reconciled with principles 1 and 4.** A lexical mode needs state across
 tokens, and a post-match action is an action, so both live outside the VM, in a
 consumer or builder layer above `Next()`. The VM itself stays as the

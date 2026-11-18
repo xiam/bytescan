@@ -5,7 +5,7 @@ This directory is the documentation home for `bytescan`.
 - [specs/core-contract.md](specs/core-contract.md) is the index of the
   **canonical prose specification**: the project purpose, the status
   convention, the terminology, and a map from every former section to its
-  document. The specification is split into seven documents under
+  document. The specification is split into eight documents under
   [`specs/`](specs/core-contract.md#documents):
   - [consumer-contract.md](specs/consumer-contract.md): what `Next()`
     returns, the scanner/consumer boundary, and illustrative scenarios;
@@ -19,7 +19,8 @@ This directory is the documentation home for `bytescan`.
     above `Next()`;
   - [design-principles.md](specs/design-principles.md): the VM design
     principles and the decision log;
-  - [open-questions.md](specs/open-questions.md): the open design questions.
+  - [open-questions.md](specs/open-questions.md): the open design questions;
+  - [cursor.md](specs/cursor.md): the positioned cursor, `bytescan/cursor`.
 
   Every substantive statement carries an explicit status — **design
   principle**, **current contract**, **intended capability**, or **open design
@@ -31,20 +32,26 @@ This directory is the documentation home for `bytescan`.
 - [rules.md](rules.md) is the **rule tier model**: what belongs in
   `rules/core`, `rules/base`, `rules/special` and `rules/octet`, and the
   import rules.
+- [writing.md](writing.md) is the **writing guide**: the three depths of the
+  documentation (README, `docs/`, `docs/specs/`), what belongs in each, and
+  the plain-language rules for READMEs.
+- [cursor.md](cursor.md) is the **cursor how-to**: reading ahead and going
+  back, limiting memory, reusing checkpoints, rune sources and byte mode.
 - [guides/README.md](guides/README.md) is the **technique chooser**: given a
   format, which technique to use (rules only, a filter, a mode driver, a
   driver read, piped scanners), and one guide per use case, from programming
   languages to nested formats, with an
   [operations page](guides/operations.md) on bounds, `Release`, retention and
-  soak tests.
+  soak tests, and a [how-it-works page](guides/how-it-works.md) on the parts,
+  the constructors, token positions and context.
 - The example programs live in a separate repository,
   [bytescan-examples](https://github.com/xiam/bytescan-examples). Its README
   is the **example catalogue**, grouped by use case, and the **example
   standard**: the layout and conventions of the example scanners.
-- The [root README](../README.md) is the project README: what the project does
-  (it reads streams of text or binary data and classifies them), what it can
-  do today, two runnable examples, the examples by use case, installation, and
-  layering. It links here for the specification.
+- The [root README](../README.md) is the project announcement: what the
+  project does, installation, a text and a binary example, what you can
+  build, the packages, and links here. [writing.md](writing.md) says what
+  belongs in it.
 
 ## How to read the status labels
 
@@ -67,7 +74,10 @@ A substantive promise with no status is a documentation bug — flag it.
 - **Rule-authoring standard.** [rule-authoring.md](rule-authoring.md).
 - **Runnable examples.** The two README examples, one for text and one for
   binary data, run as `Example` functions in
-  [`example_readme_test.go`](../example_readme_test.go).
+  [`example_readme_test.go`](../example_readme_test.go); the examples of
+  [`cursor/README.md`](../cursor/README.md) and [cursor.md](cursor.md) run in
+  [`cursor/example_readme_test.go`](../cursor/example_readme_test.go) and
+  [`cursor/example_docs_test.go`](../cursor/example_docs_test.go).
   [hello](https://github.com/xiam/bytescan-examples/tree/main/hello) in the
   [bytescan-examples](https://github.com/xiam/bytescan-examples) repository is
   the text example as a complete program, and the README of that repository
@@ -88,7 +98,8 @@ A substantive promise with no status is a documentation bug — flag it.
   checkpoints, replay) come from
   [`github.com/xiam/bytescan/cursor`](../cursor), which reads text, or bytes
   through [`bytesource`](../bytesource); the scanner owns
-  no stream mechanics.
+  no stream mechanics. The cursor's contract is
+  [specs/cursor.md](specs/cursor.md).
 
 Keep the README and the core contract as paired documentation: when one changes,
 review the other in the same change for consistency.

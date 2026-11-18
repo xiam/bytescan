@@ -337,3 +337,36 @@ func Example_guideGuard() {
 	// 1:10 RUN "aaaaaaaaaa"
 	// 1:20 RUN "aaaaa"
 }
+
+// Example_guideSpans is the code of docs/guides/how-it-works.md.
+func Example_guideSpans() {
+	lx := bytescan.New(strings.NewReader("one\ntwo"))
+	lx.MustAddRule("WORD", base.Word())
+	lx.MustAddRule("NEWLINE", base.Newline())
+
+	var tok *bytescan.Token
+	for i := 0; i < 3; i++ {
+		var err error
+		if tok, err = lx.Next(); err != nil {
+			panic(err)
+		}
+	}
+
+	span := tok.Span()
+
+	fmt.Println(span.Start().ByteOffset()) // byte offset of the first byte
+	fmt.Println(span.Start().RuneOffset()) // rune offset of the first rune
+	fmt.Println(span.Start().Line())       // 1-based line
+	fmt.Println(span.Start().Column())     // 0-based rune column
+	fmt.Println(span.End().ByteOffset())   // position just past the token
+	fmt.Println(span.Bytes())              // width in bytes
+	fmt.Println(span.Runes())              // width in runes
+	// Output:
+	// 4
+	// 4
+	// 2
+	// 0
+	// 7
+	// 3
+	// 3
+}

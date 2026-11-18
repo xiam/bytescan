@@ -108,7 +108,9 @@ one scanner at a time. Build each scanner once and reuse it. The small example i
   `core.Literal("if")` matches the `if` of `iffy`, and only a longer
   identifier match hides it. Use `core.Keywords`, which never matches there.
 - `core.Keyword` and `core.Keywords` are case-sensitive. The `IgnoreCase`
-  forms use simple case folding, so `ß` does not match `ss`.
+  forms use simple case folding, so `ß` does not match `ss`. A set of one
+  word, `core.KeywordsIgnoreCase("select")`, is the case-insensitive form of
+  `core.Keyword`.
 - A mode driver that builds a new scanner for each token is about 30 times
   slower, and a scanner that is dropped without `Release` pins the input
   behind it.

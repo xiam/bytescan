@@ -54,7 +54,9 @@ Start with the first one and move down only when a question below says so.
 
 [operations.md](operations.md) covers what every scanner of a stream needs:
 the per-token guard (`WithMaxTokenBytes`), `Release`, retention, and soak
-tests with [`streamtest`](../../streamtest).
+tests with [`streamtest`](../../streamtest). [how-it-works.md](how-it-works.md)
+explains the parts of bytescan, the constructors, token positions and the
+text around a token.
 
 ## Rules that hold for every technique
 
@@ -62,7 +64,8 @@ tests with [`streamtest`](../../streamtest).
   Register a specific rule (a keyword, a URL) before the general rule that
   also matches it (an identifier, a word).
 - **One rule per token type.** Combine several forms of one type with
-  `core.Choice`.
+  `core.Choice`, for example
+  `core.Choice(base.Float(), base.Decimal(), base.Integer())`.
 - **Input that no rule matches is `UNKNOWN`, one rune or byte at a time.** The
   scanner keeps going after it. Do not report bad input from a scanner.
 - **Bound every run on a stream that may not end.** `core.RuneRunMax` lexes a

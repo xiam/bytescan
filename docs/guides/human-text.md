@@ -97,8 +97,9 @@ The code is `Example_guideScripts` in
   hundred fifty in Spanish and one and a quarter in English. Pick the
   separators of the text, not of the program.
 - **Emoji checks the shape only.** `special.Emoji` matches any well-formed
-  UTS #51 sequence, including one outside the recommended set. `URL` and
-  `Email` also check the lexical shape only.
+  UTS #51 sequence, including one outside the recommended set. It does not
+  match an unqualified emoji: `©` alone is not an emoji, `©` followed by
+  U+FE0F is. `URL` and `Email` also check the lexical shape only.
 
 ## Tests to write
 
