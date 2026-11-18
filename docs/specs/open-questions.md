@@ -83,6 +83,14 @@ number there.
   promise. (Scenario 4 under
   [Illustrative scenarios](consumer-contract.md#illustrative-scenarios).)
 
+- <a name="question-15"></a>**15. Declarative frontends** — whether the toolkit
+  should eventually offer a declarative frontend, for example a schema- or
+  table-driven way of declaring rules, and what shape it takes. The
+  constraint: a frontend compiles down to the same engine and the same
+  `bytescan.Rule` values, so the VM and its
+  [design principles](design-principles.md#vm-design-principles) do not change.
+  ([Purpose and scope](core-contract.md#purpose-and-scope))
+
 ## Closed
 
 These are in the [decision log](design-principles.md#closed-design-questions):

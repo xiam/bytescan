@@ -72,7 +72,8 @@ and **no** implementation roadmap, and nothing in it is available API.
 - **Named rules. Intended capability.** A rule that can be referenced by name,
   so that a rule can refer to another rule, or to itself, before that rule is
   built. A Go variable that holds a rule value is reuse, not this capability:
-  a combinator takes built rules only.
+  a combinator takes built rules only. Until it exists, a recursive construct
+  such as nested parentheses needs a hand-written rule.
 - **Common tokens and specified formats. Current contract.** `rules/base`
   provides programming-language tokens (whitespace, line breaks, identifiers,
   integers, decimals and floats, quoted and raw strings, line and block
