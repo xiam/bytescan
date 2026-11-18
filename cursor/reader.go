@@ -258,7 +258,10 @@ func (t *Reader) fillAtLeast(n int) (bool, error) {
 		t.w += bytesRead
 		readErr = err
 
-		if bytesRead == 0 && readErr == nil {
+		// A rune source that read a rune too large for the room left holds it
+		// back without writing a byte. That is progress: the next pass makes
+		// room for the held rune and encodes it.
+		if bytesRead == 0 && readErr == nil && !t.hasPending {
 			readErr = io.ErrNoProgress
 		}
 	}
@@ -311,40 +314,32 @@ func (t *Reader) readInto(p []byte) (int, error) {
 	return n, err
 }
 
-// fillRunes reads runes from the rune source and encodes them into p.
+// fillRunes reads one rune from the rune source and encodes it into p.
 //
-// A rune that does not fit the room left in p is held in the reader rather than
-// dropped, and encoded on the next fill; the caller makes room for it or reports
-// the retention limit.
+// It reads exactly one rune per call, so a live source is never asked for a
+// rune before the cursor needs one: a fill returns as soon as the rune that
+// arrived is buffered. A rune that does not fit the room left in p is held in
+// the reader rather than dropped, and encoded on the next fill; the caller
+// makes room for it or reports the retention limit.
 func (t *Reader) fillRunes(p []byte) (int, error) {
-	n := 0
+	var r rune
 
-	for n < len(p) {
-		var r rune
-
-		if t.hasPending {
-			r, t.hasPending = t.pendingRune, false
-		} else {
-			var err error
-			r, _, err = t.runeSrc.ReadRune()
-			if err != nil {
-				return n, err
-			}
+	if t.hasPending {
+		r, t.hasPending = t.pendingRune, false
+	} else {
+		var err error
+		r, _, err = t.runeSrc.ReadRune()
+		if err != nil {
+			return 0, err
 		}
-
-		var encoded [utf8.UTFMax]byte
-		size := utf8.EncodeRune(encoded[:], r)
-
-		if size > len(p)-n {
-			t.pendingRune, t.hasPending = r, true
-			return n, nil
-		}
-
-		copy(p[n:], encoded[:size])
-		n += size
 	}
 
-	return n, nil
+	if encodedRuneLen(r) > len(p) {
+		t.pendingRune, t.hasPending = r, true
+		return 0, nil
+	}
+
+	return utf8.EncodeRune(p, r), nil
 }
 
 // grow makes room for at least min bytes in the buffer.
@@ -521,14 +516,50 @@ func (t *Reader) scanLocked(b []byte) {
 	}
 }
 
-// runeLookahead reports how many bytes a rune read asks the buffer for: one in
-// byte mode, a maximal UTF-8 rune otherwise. Byte mode never waits on the
-// source for bytes it does not need.
-func (t *Reader) runeLookahead() int {
+// fillRuneLocked makes the buffer hold the next rune at the cursor, reading the
+// source only while it does not. In byte mode that is one byte. In text mode it
+// is a complete UTF-8 sequence in the sense of utf8.FullRune, which includes an
+// invalid byte that decodes to utf8.RuneError of size 1; a proper prefix of a
+// multi-byte sequence reads more. So a live source that has delivered a rune
+// and then blocks still yields that rune.
+//
+// Each read asks for one more byte, and a source read returns what has
+// arrived, so a fill never waits for input the rune does not need. At io.EOF,
+// or when a source error is owed after the buffered bytes, an incomplete
+// sequence is left as it is and decodes as before.
+func (t *Reader) fillRuneLocked() error {
 	if t.byteMode {
-		return 1
+		_, err := t.fillAtLeast(1)
+		return err
 	}
-	return utf8.UTFMax
+
+	for {
+		have := t.w - t.r
+		if have >= utf8.UTFMax {
+			return nil
+		}
+
+		// Release space at the same point a fill for a maximal rune did, so
+		// the bytes kept behind the cursor do not depend on how much input
+		// the source has delivered.
+		if t.r+utf8.UTFMax >= len(t.buf) {
+			t.compact()
+		}
+
+		if have > 0 && utf8.FullRune(t.buf[t.r:t.w]) {
+			return nil
+		}
+
+		if _, err := t.fillAtLeast(have + 1); err != nil {
+			return err
+		}
+
+		if t.w-t.r == have {
+			// No byte arrived: a source error is owed after the buffered
+			// bytes, which are served first.
+			return nil
+		}
+	}
 }
 
 // flushCarry credits a carried incomplete sequence as if it had been decoded on
@@ -580,9 +611,9 @@ func (t *Reader) ReadRune() (r rune, size int, err error) {
 func (t *Reader) readRuneLocked() (LocatedRune, error) {
 	t.flushCarry()
 
-	// Try to fill the buffer with at least enough bytes for a maximal rune.
-	// We can tolerate an io.EOF here, as we might have a partial buffer to read from.
-	_, err := t.fillAtLeast(t.runeLookahead())
+	// Buffer the next rune. An io.EOF is tolerated here, as a partial
+	// sequence may still be buffered.
+	err := t.fillRuneLocked()
 	if err != nil && !errors.Is(err, io.EOF) {
 		return LocatedRune{}, err
 	}
@@ -667,7 +698,7 @@ func (t *Reader) PeekRune() (LocatedRune, error) {
 
 	t.lastRuneSize = -1
 
-	_, err := t.fillAtLeast(t.runeLookahead())
+	err := t.fillRuneLocked()
 	if err != nil && !errors.Is(err, io.EOF) {
 		return LocatedRune{}, err
 	}

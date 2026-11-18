@@ -10,6 +10,10 @@ One engine reads source code, prose in any script, logs, terminal output,
 file formats and network protocols. It can read a stream that never ends,
 in bounded memory.
 
+You get each piece while the input is still arriving, without waiting for the
+end of it. `Next` returns a piece once the rules can see where it ends, which
+is often one symbol after it.
+
 ## Install
 
 ```sh
@@ -128,6 +132,15 @@ Output (byte offset, type, length, bytes):
 
 Text and bytes use the same engine, the same kind of rules and the same loop.
 Both examples run as tests in [`example_readme_test.go`](example_readme_test.go).
+
+## When to use it
+
+Use bytescan when text or bytes arrive as a stream, and your program must
+label pieces of it by their shape before all of it has arrived. For example:
+
+- A model's streamed response, sent as JSON inside Server-Sent Events: [ssejson](https://github.com/xiam/bytescan-examples/tree/main/streams/ssejson).
+- A live log, read as the messages come in: [syslog](https://github.com/xiam/bytescan-examples/tree/main/streams/syslog).
+- The output of a running program, with its color codes: [ansi](https://github.com/xiam/bytescan-examples/tree/main/ansi).
 
 ## What you can build
 
