@@ -175,6 +175,22 @@ did. `New` and `NewReader` read an `io.Reader` as a byte stream with one UTF-8
 decoder (`TestNewRuneReaderTracksPositions`, `TestRuneReaderCheckpointReplay`,
 `TestRuneReaderKeepsRuneAtBufferBoundary`).
 
+**Current contract.** A rune read does not wait for input the rune does not
+need, so a live source (one that has delivered input and then blocks without an
+error or `io.EOF`) yields every rune it has delivered. In text mode over an
+`io.Reader`, `ReadRune`, `ReadLocatedRune` and `PeekRune` return the next rune
+as soon as the buffered bytes hold a complete sequence in the sense of
+`utf8.FullRune`, which includes an invalid byte that decodes to
+`utf8.RuneError` of size 1. A proper prefix of a multi-byte sequence reads more,
+and at `io.EOF` it decodes as before. Over a rune source, a rune read calls the
+source's `ReadRune` only for the rune it returns and does not wait for the
+buffer to fill. A scanner over a live source therefore returns every token its rules can
+decide from the input delivered so far (`TestLiveReaderReturnsArrivedRunes`,
+`TestLiveReaderReturnsCompleteSequences`,
+`TestLiveReaderWaitsForIncompleteSequence`, `TestLiveReaderPeeksArrivedRune`,
+`TestLiveRuneSourceReturnsArrivedRunes`;
+`TestScannerReturnsTokensFromLiveSource` in `tests/`).
+
 **Current contract.** An error from the underlying source is sticky: a replay
 from a checkpoint reproduces the same error, not whatever the source would
 report on a second pass (`TestReaderErrorReplaysDeterministically`,
