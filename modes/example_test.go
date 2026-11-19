@@ -75,3 +75,68 @@ func Example() {
 	// CLOSE "\""
 	// string scanners: 2
 }
+
+// The modes of a small language with strings, and the mode state at the start
+// of each token. Each rule carries its action: a quote in code pushes the
+// string mode, and a quote in a string pops it. The driver applies the
+// actions; there is no switching code. A saved state is a copy, and a scan
+// that starts with it at the same place goes on as the first scan did.
+func ExampleModeSet() {
+	word := core.RuneRun(core.RuneRange('a', 'z'))
+	quote := core.Literal(`"`)
+
+	ms := modes.NewModeSet("code")
+	ms.Mode("code").
+		Rule("WORD", word).
+		Rule("WS", core.RuneRun(core.RuneSet(" "))).
+		Push("QUOTE", quote, "str")
+	ms.Mode("str").
+		Rule("TEXT", core.RuneRun(core.RuneSet(`"`).Not())).
+		Pop("QUOTE", quote)
+
+	text := `say "hi" now`
+	d, err := ms.Driver(cursor.New(strings.NewReader(text)), modes.Stack{})
+	if err != nil {
+		fmt.Println("error:", err)
+		return
+	}
+
+	var (
+		saved modes.Stack
+		at    int
+	)
+	for {
+		st := d.Stack() // the mode state at the start of the next token
+		l, err := d.Next()
+		if err == io.EOF {
+			break
+		}
+		if err != nil {
+			fmt.Println("error:", err)
+			return
+		}
+		fmt.Printf("%-5s %-6q top=%s depth=%d\n", l.Type(), l.Text(), st.Top(), st.Len())
+		if l.Text() == "hi" {
+			saved, at = st, l.Offset()
+		}
+	}
+
+	// Start again at "hi", in the state saved there.
+	d, err = ms.Driver(cursor.New(strings.NewReader(text[at:])), saved)
+	if err != nil {
+		fmt.Println("error:", err)
+		return
+	}
+	l, _ := d.Next()
+	fmt.Println("again:", l.Type(), l.Text(), d.Stack().Equal(saved))
+
+	// Output:
+	// WORD  "say"  top=code depth=1
+	// WS    " "    top=code depth=1
+	// QUOTE "\""   top=code depth=1
+	// TEXT  "hi"   top=str depth=2
+	// QUOTE "\""   top=str depth=2
+	// WS    " "    top=code depth=1
+	// WORD  "now"  top=code depth=1
+	// again: TEXT hi true
+}

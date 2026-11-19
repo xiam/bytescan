@@ -42,6 +42,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"math"
 	"sync"
 	"unicode/utf8"
 
@@ -126,6 +127,11 @@ type Reader struct {
 	// a rune.
 	utf8Carry    [utf8.UTFMax]byte
 	utf8CarryLen int
+
+	// start describes where the source begins in a larger text. It is set by
+	// ResetStart, and it is Start{LineStart: true} for a reader that is never
+	// reset.
+	start Start
 }
 
 // New returns a new Reader that reads from r with the default buffer
@@ -192,6 +198,7 @@ func newTextReader(opts ...Option) *Reader {
 		capacity:     defaultCapacity,
 		pos:          position.New(),
 		lastRuneSize: -1,
+		start:        Start{LineStart: true},
 	}
 	for _, opt := range opts {
 		if opt != nil {
@@ -270,6 +277,13 @@ func (t *Reader) fillAtLeast(n int) (bool, error) {
 		return true, nil
 	}
 
+	if errors.Is(readErr, ErrMoreInput) {
+		// The source has no input now. The error is not sticky, so it is
+		// reported here and not deferred behind the buffered bytes: the caller
+		// decides whether the bytes it has are enough.
+		return t.w-t.r >= n, readErr
+	}
+
 	if !errors.Is(readErr, io.EOF) && t.w-t.r > 0 {
 		// The source failed, but buffered bytes are still owed to the caller.
 		// Serve them first: the sticky error surfaces once the buffer drains,
@@ -307,7 +321,9 @@ func (t *Reader) readInto(p []byte) (int, error) {
 		n, err = t.br.Read(p)
 	}
 
-	if err != nil && !errors.Is(err, io.EOF) {
+	// ErrMoreInput is not sticky: the source has no input now, and the next
+	// read asks it again.
+	if err != nil && !errors.Is(err, io.EOF) && !errors.Is(err, ErrMoreInput) {
 		t.readErr = err
 	}
 
@@ -526,10 +542,16 @@ func (t *Reader) scanLocked(b []byte) {
 // Each read asks for one more byte, and a source read returns what has
 // arrived, so a fill never waits for input the rune does not need. At io.EOF,
 // or when a source error is owed after the buffered bytes, an incomplete
-// sequence is left as it is and decodes as before.
+// sequence is left as it is and decodes as before. When the source returns
+// ErrMoreInput before the rune is complete, the fill returns that error and
+// the incomplete sequence stays in the buffer for the next read.
 func (t *Reader) fillRuneLocked() error {
 	if t.byteMode {
 		_, err := t.fillAtLeast(1)
+		if err != nil && t.w-t.r > 0 && errors.Is(err, ErrMoreInput) {
+			// The byte arrived with the signal: the read does not need more.
+			return nil
+		}
 		return err
 	}
 
@@ -551,6 +573,11 @@ func (t *Reader) fillRuneLocked() error {
 		}
 
 		if _, err := t.fillAtLeast(have + 1); err != nil {
+			if errors.Is(err, ErrMoreInput) && t.w-t.r > have && utf8.FullRune(t.buf[t.r:t.w]) {
+				// The bytes that arrived with the signal complete the rune,
+				// so this read does not need more input.
+				return nil
+			}
 			return err
 		}
 
@@ -832,8 +859,11 @@ func (t *Reader) Read(p []byte) (n int, err error) {
 	t.lastRuneSize = -1
 
 	// An error returned alongside data must reach the caller rather than being
-	// deferred, which is what io.Reader requires.
-	if readErr != nil && !errors.Is(readErr, io.EOF) {
+	// deferred, which is what io.Reader requires. ErrMoreInput is the
+	// exception, as io.EOF is: the bytes are returned first, and the next Read
+	// asks the source again.
+	moreInput := filled > 0 && errors.Is(readErr, ErrMoreInput)
+	if readErr != nil && !errors.Is(readErr, io.EOF) && !moreInput {
 		return filled, readErr
 	}
 
@@ -845,77 +875,100 @@ func (t *Reader) Read(p []byte) (n int, err error) {
 }
 
 // Seek sets the offset for the next Read or ReadRune, interpreting offset and
-// whence according to the io.Seeker interface. This Seek implementation
-// operates only on the data currently held in the reader's buffer. It cannot
-// seek backwards to data that has already been read and discarded from the
-// buffer. An attempt to seek to a position before the start of the current
-// buffer will result in an ErrSeekOutOfBuffer.  It does not perform a seek on
-// the underlying io.Reader.
+// whence according to the io.Seeker interface. It returns the new byte offset.
+//
+// Seek moves only within the bytes the reader holds in its buffer, and it can
+// read ahead from the source to reach a forward target. It does not perform a
+// seek on the underlying io.Reader. io.SeekEnd counts from the end of the
+// buffered bytes, not from the end of the input.
+//
+// Seek first computes the absolute stream offset of the target, for every
+// whence. Then:
+//
+//   - A target before stream offset 0 fails with the error "cursor: negative
+//     position".
+//   - A target at or after offset 0 but before the start of the buffer fails
+//     with ErrSeekOutOfBuffer. The bytes there were read and discarded.
+//   - A forward target past the buffer capacity, or after the end of the
+//     input, fails with ErrSeekOutOfBuffer.
+//   - A forward target past the retention limit of an active checkpoint fails
+//     with ErrRetentionExceeded (see WithMaxRetained).
+//
+// A failed Seek does not move the position. The byte offset, the rune offset,
+// the line and the column stay the same. A Read can stop inside a multi-byte
+// UTF-8 sequence; after a failed Seek, that sequence is still pending, and
+// the next Read that completes it counts it as one rune. To reach a forward
+// target, a failed Seek can still have read ahead from the source into the
+// buffer.
+//
+// A Seek to the current position does nothing. A Seek that moves first
+// settles a pending partial sequence: each byte of it counts as one rune.
 func (t *Reader) Seek(offset int64, whence int) (int64, error) {
 	t.mu.Lock()
 	defer t.mu.Unlock()
 
-	var newR int64 // new read pointer relative to start of t.buf
+	current := int64(t.pos.Offset())
+	bufferStart := current - int64(t.r)
 
+	// base is the absolute stream offset that offset counts from.
+	var base int64
 	switch whence {
 	case io.SeekStart:
-		if offset < 0 {
-			return 0, errors.New("cursor: negative position")
-		}
-
-		// Calculate the absolute stream offset that corresponds to the start of our buffer.
-		bufferStartOffset := int64(t.pos.Offset() - t.r)
-
-		// If the target absolute offset is before the start of our buffered data, we cannot seek there.
-		if offset < bufferStartOffset {
-			return 0, ErrSeekOutOfBuffer
-		}
-
-		// Calculate new read pointer relative to the buffer.
-		newR = offset - bufferStartOffset
-
+		base = 0
 	case io.SeekCurrent:
-		newR = int64(t.r) + offset
+		base = current
 	case io.SeekEnd:
-		newR = int64(t.w) + offset
+		base = bufferStart + int64(t.w)
 	default:
 		return 0, errors.New("cursor: invalid whence")
 	}
 
-	if newR < 0 {
+	// A target that does not fit an int64 is past the buffer capacity.
+	if offset > 0 && base > math.MaxInt64-offset {
+		return 0, ErrSeekOutOfBuffer
+	}
+	target := base + offset
+
+	if target < 0 {
 		return 0, errors.New("cursor: negative position")
 	}
+	if target < bufferStart {
+		return 0, ErrSeekOutOfBuffer
+	}
 
-	rel := newR - int64(t.r)
+	rel := target - current
 	if rel == 0 {
 		// A seek that does not move the cursor is a no-op: it must not settle a
 		// pending partial UTF-8 sequence or otherwise change the position.
-		return int64(t.pos.Offset()), nil
+		return current, nil
 	}
 
-	// A seek that does move is a position-changing operation, so pending partial
-	// UTF-8 accounting is settled before the buffer is re-pointed.
-	t.flushCarry()
-
-	// Check bounds before converting to int for buffer operations
+	// newR is the new read pointer relative to the start of t.buf. It is not
+	// negative, because the target is at or after the buffer start. It is
+	// checked before it is converted to int for buffer operations.
+	newR := target - bufferStart
 	if newR > int64(len(t.buf)) {
 		return 0, ErrSeekOutOfBuffer
 	}
-	newRInt := int(newR)
 	relInt := int(rel)
 
+	// Every check below runs before the position changes, so a failed seek
+	// leaves the position and a pending partial UTF-8 sequence as they are. A
+	// seek that moves is a position-changing operation, so the pending
+	// sequence is settled just before the cursor moves.
 	if rel > 0 { // Seeking Forward
 		if headroom := t.retentionHeadroom(); headroom >= 0 && relInt > headroom {
 			return 0, ErrRetentionExceeded
-		}
-		if relInt > len(t.buf) {
-			return 0, ErrSeekOutOfBuffer
 		}
 
 		bytesAvailable := t.w - t.r
 		if relInt > bytesAvailable {
 			if _, err := t.fillAtLeast(relInt); err != nil && !errors.Is(err, io.EOF) {
-				return 0, fmt.Errorf("fillAtLeast: %w", err)
+				// Bytes can arrive together with ErrMoreInput. The seek fails
+				// with the signal only when they do not reach the target.
+				if !errors.Is(err, ErrMoreInput) || t.r+relInt > t.w {
+					return 0, fmt.Errorf("fillAtLeast: %w", err)
+				}
 			}
 		}
 
@@ -923,15 +976,19 @@ func (t *Reader) Seek(offset int64, whence int) (int64, error) {
 			return 0, ErrSeekOutOfBuffer
 		}
 
+		t.flushCarry()
 		t.scanLocked(t.buf[t.r : t.r+relInt])
 		t.runeOffset += t.runeCount(t.buf[t.r : t.r+relInt])
 		t.r += relInt
 
 	} else { // Seeking Backward
-		if newRInt < 0 {
-			return 0, ErrSeekOutOfBuffer
-		}
-		// Count runes in the slice we're rewinding over
+		newRInt := int(newR)
+
+		t.flushCarry()
+
+		// Count runes in the slice we're rewinding over. The rewind cannot
+		// fail: the target is at or after the buffer start, and the reader
+		// keeps the line positions from the buffer start onward.
 		runeCount := t.runeCount(t.buf[newRInt:t.r])
 		if err := t.pos.Rewind(-relInt, runeCount); err != nil {
 			return 0, fmt.Errorf("pos.Rewind: %w", err)

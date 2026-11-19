@@ -116,6 +116,16 @@ type remarkableCursor interface {
 	Remark(*cursor.Checkpoint) error
 }
 
+// startCursor is implemented by cursors that can start in the middle of a text
+// (cursor.Reader.ResetStart). It backs the BOF and BOL flags of the symbol at
+// offset 0: the cursor reports positions from the start of its source, and
+// Start reports whether that source begins at offset 0 of the text and whether
+// the byte before it is a newline. It is optional, following contextualCursor:
+// a cursor without it gives the symbol at offset 0 both flags, as before.
+type startCursor interface {
+	Start() cursor.Start
+}
+
 // Option configures a scanner created by NewWithOptions or NewWithCursorOptions.
 type Option func(*config)
 
@@ -180,6 +190,10 @@ type Scanner struct {
 	// place (the Remark capability). It is set once at construction, because
 	// the cursor is fixed for the life of the scanner.
 	canRemark bool
+
+	// starter is the cursor when it implements startCursor, and nil otherwise.
+	// It is set once at construction, as canRemark is.
+	starter startCursor
 
 	// maxTokenBytes is the per-token byte bound passed to WithMaxTokenBytes, or
 	// zero for unbounded. It is enforced by the scanner here rather than delegated
@@ -269,6 +283,9 @@ func newWithCursorConfig(c Cursor, cfg *config) *Scanner {
 	if _, ok := c.(remarkableCursor); ok {
 		sc.canRemark = true
 	}
+	if s, ok := c.(startCursor); ok {
+		sc.starter = s
+	}
 	sc.maxTokenBytes = cfg.maxTokenBytes
 	return sc
 }
@@ -330,6 +347,15 @@ func (sc *Scanner) MustAddRule(lexType TokenType, lexRule Rule) {
 // still waiting for input at the end of input is retired, not reported: only
 // the matches it recorded earlier count.
 //
+// A source that has no input now, but has not ended, can return
+// cursor.ErrMoreInput instead of blocking. Next then returns ErrMoreInput
+// itself, not a wrapped error, so err == ErrMoreInput holds. Next returns it
+// only when the rules have not decided the next token: the call consumes
+// nothing, and the next call lexes the same token again from its start, with
+// the input that arrived in between. The rules are shown the end of input only
+// when the source returns io.EOF. WithMaxTokenBytes still fails a token that
+// grows past the bound before it is decided.
+//
 // Any other error leaves the input where it was: a failed call consumes
 // nothing, and a retry starts the same token over. Such an error matches
 // ErrNoRules when no rule is registered, ErrTokenTooLarge together with
@@ -340,6 +366,39 @@ func (sc *Scanner) MustAddRule(lexType TokenType, lexRule Rule) {
 //
 // This method is safe for concurrent use by multiple goroutines.
 func (sc *Scanner) Next() (*Token, error) {
+	sc.mu.Lock()
+	defer sc.mu.Unlock()
+
+	tok, _, err := sc.nextToken()
+	return tok, err
+}
+
+// Lookahead records how far the rules read when they decided a token. The
+// reach of the token is its end byte offset plus After.
+type Lookahead struct {
+	// After is the number of bytes that the rules were shown after the end of
+	// the token. It counts the symbols shown to the rules, not the bytes that
+	// the cursor buffered. It is 0 when the rules decided the token without
+	// reading past its end.
+	After int
+	// ReadEnd reports that the rules were shown the end of input: the source
+	// returned io.EOF while the token was decided. A source that returns
+	// cursor.ErrMoreInput does not show the rules the end of input, and a
+	// token that the rules had not decided then is not returned. So a token
+	// that the rules decided from the available input has ReadEnd false.
+	ReadEnd bool
+}
+
+// NextLookahead returns the next token, as Next does, together with its
+// Lookahead record. It returns the same tokens and the same errors as Next,
+// and it consumes the same input. When the error is not nil, the token is nil
+// and the record is the zero Lookahead.
+//
+// The record is returned with its token, so it stays correct when several
+// goroutines call the scanner.
+//
+// This method is safe for concurrent use by multiple goroutines.
+func (sc *Scanner) NextLookahead() (*Token, Lookahead, error) {
 	sc.mu.Lock()
 	defer sc.mu.Unlock()
 
@@ -439,7 +498,8 @@ func (sc *Scanner) getProcessor() (*rulesProcessor, error) {
 // It reports isEOF for the synthetic end-of-input symbol, which carries RuneEOF
 // and the FlagEOF flag and is not part of the input. The positional flags come
 // from the located rune and the cursor position, so a symbol read again during
-// replay gets the same flags.
+// replay gets the same flags. At offset 0 they also come from the start of the
+// cursor's source (see startCursor).
 func (sc *Scanner) readSymbol() (sym Symbol, isEOF bool, err error) {
 	lr, err := sc.cursor.ReadLocatedRune()
 	if err != nil {
@@ -449,15 +509,27 @@ func (sc *Scanner) readSymbol() (sym Symbol, isEOF bool, err error) {
 
 		at := sc.cursor.Cursor()
 
-		return NewSymbol(RuneEOF, symbolFlags(at, RuneEOF, true)), true, nil
+		flags := symbolFlags(at, RuneEOF, true)
+		if sc.starter != nil && at.IsStart() {
+			flags = flags&^(FlagBOF|FlagBOL) | startFlags(sc.starter)
+		}
+
+		return NewSymbol(RuneEOF, flags), true, nil
 	}
 
-	return Symbol{r: lr.Rune(), flags: uint8(symbolFlags(lr.Pos(), lr.Rune(), false)), size: uint8(lr.Size())}, false, nil
+	at := lr.Pos()
+	flags := symbolFlags(at, lr.Rune(), false)
+	if sc.starter != nil && at.IsStart() {
+		flags = flags&^(FlagBOF|FlagBOL) | startFlags(sc.starter)
+	}
+
+	return Symbol{r: lr.Rune(), flags: uint8(flags), size: uint8(lr.Size())}, false, nil
 }
 
 // symbolFlags derives a symbol's positional flags from the position it was read
 // at. BOF is the start of the stream, BOL is rune column zero, and EOL is a
-// newline; EOF is supplied by the caller.
+// newline; EOF is supplied by the caller. readSymbol replaces BOF and BOL at
+// offset 0 when the cursor knows where its source starts (see startFlags).
 func symbolFlags(at cursor.Pos, r rune, eof bool) uint {
 	flags := uint(FlagNone)
 
@@ -474,6 +546,25 @@ func symbolFlags(at cursor.Pos, r rune, eof bool) uint {
 		flags |= FlagEOF
 	}
 
+	return flags
+}
+
+// startFlags returns the BOF and BOL flags of the symbol at offset 0 of a
+// cursor that knows where its source starts: BOF when the source is not in the
+// middle of a text (!InText), and BOL when the byte before the source is a
+// newline (LineStart). A cursor that was never reset reports InText false and
+// LineStart true, so the flags are the ones symbolFlags gives. Every other
+// symbol gets its flags from its position. It is kept apart from symbolFlags,
+// which stays small enough to be inlined for every symbol.
+func startFlags(starter startCursor) uint {
+	s := starter.Start()
+	flags := uint(FlagNone)
+	if !s.InText {
+		flags |= FlagBOF
+	}
+	if s.LineStart {
+		flags |= FlagBOL
+	}
 	return flags
 }
 
@@ -507,10 +598,12 @@ func (sc *Scanner) remarkSlot(idx int) *cursor.Checkpoint {
 	return c
 }
 
-func (sc *Scanner) nextToken() (*Token, error) {
+// nextToken lexes the next token and returns it with its Lookahead record.
+// Next drops the record; NextLookahead returns it.
+func (sc *Scanner) nextToken() (*Token, Lookahead, error) {
 	processor, err := sc.getProcessor()
 	if err != nil {
-		return nil, err
+		return nil, Lookahead{}, err
 	}
 
 	// Mark the start of the token in the in-flight slot: the cursor retains every
@@ -524,15 +617,22 @@ func (sc *Scanner) nextToken() (*Token, error) {
 	// token start so a failed Next consumes nothing and a retry starts over. The
 	// previous token's checkpoint is deliberately left active, so its context
 	// survives a failed call and an EOF probe.
-	abandon := func(err error) (*Token, error) {
+	abandon := func(err error) (*Token, Lookahead, error) {
 		_ = mark.Reset()
 		_ = mark.Release()
-		return nil, err
+		return nil, Lookahead{}, err
 	}
 
 	for {
 		sym, isEOF, err := sc.readSymbol()
 		if err != nil {
+			if errors.Is(err, cursor.ErrMoreInput) {
+				// The rules have not decided the token, and the source has
+				// no input now. The unfinished token is not returned: the
+				// cursor steps back to its start, and the next call lexes it
+				// again from there. The signal is returned unwrapped.
+				return abandon(ErrMoreInput)
+			}
 			return abandon(fmt.Errorf("bytescan: ReadRune: %w", err))
 		}
 		if !isEOF {
@@ -623,12 +723,21 @@ func (sc *Scanner) nextToken() (*Token, error) {
 		// Commit the cursor over exactly the matched bytes. The token is the
 		// prefix of what was read, so committing is stepping back over the
 		// speculative overshoot rather than replaying the token.
+		//
+		// Before the step back, the cursor sits just after the last symbol
+		// that the rules were shown: that position is the token's reach. The
+		// overshoot is the reach minus the token's end, which is the After of
+		// the record. It counts symbols shown to the rules, not bytes that the
+		// cursor buffered. The rules were shown the end of input exactly when
+		// the last symbol was the synthetic EOF symbol.
 		end := sc.cursor.Cursor()
+		la := Lookahead{ReadEnd: isEOF}
 		if overshoot := (end.ByteOffset() - start.ByteOffset()) - spanBytes; overshoot > 0 {
 			if _, err := sc.cursor.Seek(int64(-overshoot), io.SeekCurrent); err != nil {
 				return abandon(fmt.Errorf("bytescan: commit cursor: %w", err))
 			}
 			end = sc.cursor.Cursor()
+			la.After = overshoot
 		}
 
 		span := cursor.NewSpan(start, end)
@@ -646,8 +755,8 @@ func (sc *Scanner) nextToken() (*Token, error) {
 
 		if box != nil {
 			box.token = Token{typ: typ, text: runes, offset: span.Start().RuneOffset(), span: span}
-			return &box.token, nil
+			return &box.token, la, nil
 		}
-		return NewTokenWithSpan(typ, runes, span), nil
+		return NewTokenWithSpan(typ, runes, span), la, nil
 	}
 }

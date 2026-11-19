@@ -5,7 +5,7 @@ This directory is the documentation home for `bytescan`.
 - [specs/core-contract.md](specs/core-contract.md) is the index of the
   **canonical prose specification**: the project purpose, the status
   convention, the terminology, and a map from every former section to its
-  document. The specification is split into eight documents under
+  document. The specification is split into nine documents under
   [`specs/`](specs/core-contract.md#documents):
   - [consumer-contract.md](specs/consumer-contract.md): what `Next()`
     returns, the scanner/consumer boundary, and illustrative scenarios;
@@ -20,7 +20,11 @@ This directory is the documentation home for `bytescan`.
   - [design-principles.md](specs/design-principles.md): the VM design
     principles and the decision log;
   - [open-questions.md](specs/open-questions.md): the open design questions;
-  - [cursor.md](specs/cursor.md): the positioned cursor, `bytescan/cursor`.
+  - [cursor.md](specs/cursor.md): the positioned cursor, `bytescan/cursor`;
+  - [resumable-lexing.md](specs/resumable-lexing.md): the contract for
+    lexing text that changes after it was lexed (a REPL line, a document in
+    an editor): "need more input", the mode state, the lookahead record and
+    the lexer with state, `statelex`.
 
   Every substantive statement carries an explicit status — **design
   principle**, **current contract**, **intended capability**, or **open design
@@ -44,14 +48,17 @@ This directory is the documentation home for `bytescan`.
   [operations page](guides/operations.md) on bounds, `Release`, retention and
   soak tests, and a [how-it-works page](guides/how-it-works.md) on the parts,
   the constructors, token positions and context.
+- [guides/text-that-changes.md](guides/text-that-changes.md) is the guide to
+  **lexing text that changes**: the lexer with state, `statelex`, for an
+  editor or a REPL.
 - The example programs live in a separate repository,
   [bytescan-examples](https://github.com/xiam/bytescan-examples). Its README
   is the **example catalogue**, grouped by use case, and the **example
   standard**: the layout and conventions of the example scanners.
 - The [root README](../README.md) is the project announcement: what the
-  project does, installation, a text and a binary example, what you can
-  build, the packages, and links here. [writing.md](writing.md) says what
-  belongs in it.
+  project does, installation, a text and a binary example, an example of
+  text that changes, what you can build, the packages, and links here.
+  [writing.md](writing.md) says what belongs in it.
 
 ## How to read the status labels
 
@@ -72,8 +79,8 @@ A substantive promise with no status is a documentation bug — flag it.
 - **Specification.** [specs/core-contract.md](specs/core-contract.md), the index of
   the specification documents.
 - **Rule-authoring standard.** [rule-authoring.md](rule-authoring.md).
-- **Runnable examples.** The two README examples, one for text and one for
-  binary data, run as `Example` functions in
+- **Runnable examples.** The three README examples, one for text, one for
+  binary data and one for text that changes, run as `Example` functions in
   [`example_readme_test.go`](../example_readme_test.go); the examples of
   [`cursor/README.md`](../cursor/README.md) and [cursor.md](cursor.md) run in
   [`cursor/example_readme_test.go`](../cursor/example_readme_test.go) and

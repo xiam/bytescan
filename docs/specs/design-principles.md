@@ -243,6 +243,54 @@ meaningful.
 
 ### Owner decisions
 
+- **2026-11-19 — where an empty change sits.** An edit that changes no
+  token, such as case A24, gives an empty change. It sits where the trim at
+  the start and the trim at the end meet: `Start`, `OldEnd` and `NewEnd` are
+  equal there, and `Shift()` is 0. The owner recorded the behavior of the
+  code; no code changed. Current contract; see
+  [What the change contains](resumable-lexing.md#what-the-change-contains).
+- **2026-11-18 — the internal error of the lexer with state.** A broken
+  engine invariant during a re-lex returns an error that wraps the existing
+  `bytescan.ErrInternal`. The owner added no exported name for it. Every
+  later call that can fail returns the same error. This answers the point of
+  question 29 that was left open. Current contract; see
+  [Errors](resumable-lexing.md#errors).
+- **2026-11-18 — the questions of the lexer with state.** The owner answered
+  questions 17, 23, 24, 25, 26, 28 and 29 and approved the names and
+  signatures that [Resumable lexing](resumable-lexing.md#the-lexer-with-state)
+  gives for them: the package `statelex`; one constructor that takes a
+  `modes.ModeSet`; one edit for each call, at character boundaries, with any
+  bytes; a complete change value that lists the removed and the inserted
+  tokens; a trim by type, range and bytes; the end of the held text as the
+  end of input; five queries and two position conversions; no option that
+  can fail a re-lex. The owner deferred question 27. When the owner decided,
+  all of it was Intended capability. It is a Current contract. Closes
+  questions 17, 23, 24, 25, 26, 28 and 29; see [Closed design questions](#closed-design-questions).
+- **2026-11-18 — the engine questions of resumable lexing.** The owner
+  answered questions 16, 18, 19, 20, 21 and 30 and approved the names and
+  signatures that [Resumable lexing](resumable-lexing.md) gives for them:
+  "need more input" is a sentinel from the source; a second scanner method
+  returns the lookahead record; a scan restarts with positions from the
+  restart point and two start flags; the flags are part of the sync test;
+  the rules carry the mode actions; the lexer with state is an optional
+  package of this module, built after the engine pieces, with balanced trees
+  inside. When the owner decided, all of it was Intended capability. It is a
+  Current contract. Closes
+  questions 16, 18, 19, 20, 21 and 30; see
+  [Closed design questions](#closed-design-questions).
+- **2026-11-18 — resumable lexing and the lexer with state.** The lexer state
+  for text that changes after it was lexed is bytescan's job; handling the
+  document (undo, lines, display) is not. Three layers: the engine, unchanged,
+  so a stream consumer pays nothing; pure rule definitions; and an optional
+  lexer with state that holds its own copy of the text and accepts requests to
+  change ranges that were already lexed. A re-lex restarts at a token boundary.
+  A scanner reports "need more input" as a distinct signal. bytescan defines
+  the mode state as a stack of mode names. One edit gives one change message:
+  the removed tokens, the inserted tokens, and the shift of everything after.
+  This decision approved no API (the answers above approved some names).
+  When the owner decided, all of it was Intended capability. It is a Current
+  contract since the package `statelex` was built. See
+  [Resumable lexing](resumable-lexing.md).
 - **2026-11-17 — the cursor moves into bytescan.** The cursor of
   `github.com/xiam/textreader` becomes the package `github.com/xiam/bytescan/cursor`
   (type `cursor.Reader`, was `TextReader`), which imports only the standard
@@ -303,6 +351,120 @@ meaningful.
   `TestCodeNewlinePositions`. Whether the toolkit promises them independently
   of the cursor stays open as question 5.
   ([Line and column conventions](consumer-contract.md#line-and-column-conventions))
+
+- <a name="question-16"></a>**16. Complete tokens and the true end of input** — closed by the
+  owner decision of 2026-11-18 above. A source that has no input now returns
+  the sentinel `cursor.ErrMoreInput`; `io.EOF` stays the true end. `Next`
+  returns the same value, not wrapped (`bytescan.ErrMoreInput` is a second
+  name for it). A token is complete when the rules decided it before the
+  available input ran out; the unfinished token is not returned and is lexed
+  again from its start. Current contract.
+  ([Need more input](resumable-lexing.md#need-more-input))
+
+- <a name="question-17"></a>**17. The end of the held text** — closed by the owner decision of
+  2026-11-18 above. At the end of its text, the lexer with state shows the
+  rules the end of input, always, so every byte belongs to a token. A REPL
+  sees an open construct through `ModeAtEnd` and `Unfinished`. Current
+  contract, for the end of input and for the two queries.
+  ([The end of the held text](resumable-lexing.md#the-end-of-the-held-text))
+
+- <a name="question-18"></a>**18. Positional flags at a restart and at a sync point** — closed by
+  the owner decision of 2026-11-18 above. A restart receives its flags from
+  `cursor.Start` (question 19). A boundary is a sync point only when the BOF
+  and BOL flags of its first symbol are the same in the old and the new
+  text; the flags are computed from the text, and nothing is stored for each
+  token. Current contract.
+  ([Why the sync test is exact](resumable-lexing.md#why-the-sync-test-is-exact))
+
+- <a name="question-19"></a>**19. Starting a scan at a position and in a state** — closed by the
+  owner decision of 2026-11-18 above. `cursor.Reader.ResetStart` resets the
+  cursor onto the text from a position; the scan reports positions from the
+  restart point, and `cursor.Start` carries the two facts that a rule can see
+  there (`InText`, `LineStart`). The lexer with state adds the restart offset
+  to byte offsets. The scanner reads the start through `cursor.Reader.Start`
+  (owner decision, 2026-11-18).
+  The mode state of the start comes from question 21, a Current contract.
+  Current contract for the position and the flags; a restart in a given mode
+  state is a Current contract (`TestStartInsidePushedMode`).
+  ([Starting a scan in the middle](resumable-lexing.md#starting-a-scan-in-the-middle),
+  [Cursor contract](cursor.md))
+
+- <a name="question-20"></a>**20. The lookahead record** — closed by the owner decision of
+  2026-11-18 above. `Scanner.NextLookahead` returns the token and a
+  `Lookahead` value: the bytes shown to the rules after the end of the token
+  (`After`) and whether the rules were shown the end of input (`ReadEnd`).
+  `Next`, `Token` and `Source` do not change. Current contract.
+  ([The lookahead record](resumable-lexing.md#the-lookahead-record))
+
+- <a name="question-21"></a>**21. The mode stack and the `modes` package** — closed by the owner
+  decision of 2026-11-18 above. A `modes.ModeSet` holds named modes; each rule
+  of a mode carries its action (`Rule` stays, `Push` pushes a mode, `Pop`
+  pops). A pop of the last mode does nothing. `modes.Stack` is an opaque value
+  with `Top`, `Len` and `Equal`. `Driver`, `SwitchFunc` and `Cache` do not
+  change. Current contract (`modes.ModeSet`, `modes.StackDriver`;
+  `TestRuleSetB`, `TestStackDriverPopLastMode`).
+  ([The mode state](resumable-lexing.md#the-mode-state),
+  [Lexical modes](layers.md#lexical-modes-modes))
+
+- <a name="question-23"></a>**23. The edit request, the change, the constructor and the names** —
+  closed by the owner decision of 2026-11-18 above. Package `statelex`.
+  `New(ms *modes.ModeSet)` builds an empty lexer, and reads the definitions
+  through a bridge that is not exported. `Apply(e Edit)` takes one edit and
+  returns one `Change`, a complete value with `Start`, `OldEnd`, `NewEnd`,
+  `Removed`, `Inserted` and the method `Shift`. A `Token` is a type and a
+  byte range, with no mode state. `Insert`, `Delete` and `SetText` are the
+  conveniences. Current contract for a set with one
+  mode and for a set of several modes.
+  ([The constructor](resumable-lexing.md#the-constructor),
+  [The edit request](resumable-lexing.md#the-edit-request),
+  [The change message](resumable-lexing.md#the-change-message))
+
+- <a name="question-24"></a>**24. Which tokens count as unchanged in a change** — closed by the
+  owner decision of 2026-11-18 above. A token at either end of the re-lexed
+  run is left out when the old and the new token have the same type, the
+  same range (moved by `d` at the end) and the same bytes. The trim at the
+  start does not stop at the edit. Current contract.
+  ([What the change contains](resumable-lexing.md#what-the-change-contains))
+
+- <a name="question-25"></a>**25. Lines, columns and rune offsets after an edit** — closed by the
+  owner decision of 2026-11-18 above. The rope keeps newline and rune counts
+  in each node; `Position` and `Offset` convert between a byte offset and a
+  line and rune column in O(log n). No token stores a coordinate. UTF-16
+  columns are not part of this milestone. Current contract.
+  ([Lines, columns and rune offsets](resumable-lexing.md#lines-columns-and-rune-offsets))
+
+- <a name="question-26"></a>**26. Edit units** — closed by the owner decision of 2026-11-18
+  above. An edit uses byte offsets. `Apply` refuses with `ErrSplitRune`, and
+  changes nothing, an edit whose start or end falls inside a valid UTF-8
+  character; the owner: "I don't see a reason why to split Unicode
+  characters. That is usually not expected anywhere." The new bytes may be
+  any bytes, invalid UTF-8 included. Step 1 of the re-lex has a clause for
+  broken bytes before the edit. Current contract.
+  ([The edit request](resumable-lexing.md#the-edit-request),
+  [The four steps](resumable-lexing.md#the-four-steps))
+
+- <a name="question-28"></a>**28. Reading the lexer state** — closed by the owner decision of
+  2026-11-18 above. `Len`, `Text`, `Tokens`, `ModeAtEnd` and `Unfinished`; a
+  range is clipped and a query never fails. A query for the token or the mode
+  state at an offset is not part of this milestone. Current contract.
+  ([The queries](resumable-lexing.md#the-queries))
+
+- <a name="question-29"></a>**29. Errors while re-lexing** — closed by the owner decision of
+  2026-11-18 above. The lexer takes no scanner option that can fail a token.
+  `ErrRange` and `ErrSplitRune` change nothing. `New` checks the mode set. An
+  internal error makes every later call that can fail return it; it wraps
+  `bytescan.ErrInternal` (the owner decision on the internal error above).
+  Current contract.
+  ([Errors](resumable-lexing.md#errors))
+
+- <a name="question-30"></a>**30. Packaging, the token store and the build order** — closed by
+  the owner decision of 2026-11-18 above. The lexer with state is an optional
+  package of this module (`statelex`, question 23), which the core never
+  imports. It is built after the four engine pieces. It holds the text in a
+  rope and the tokens in a balanced tree with summed lengths and the furthest
+  reach, not visible in the API. Current contract.
+  ([Scope and layers](resumable-lexing.md#scope-and-layers),
+  [The lexer with state](resumable-lexing.md#the-lexer-with-state))
 
 ### Known deviations
 

@@ -30,6 +30,7 @@ specification rather than against behavior.
 | [Design principles and decision log](design-principles.md) | The five VM design principles with the engine's conformance, owner decisions, closed questions, and the history of the known deviations |
 | [Open design questions](open-questions.md) | Every open question with its constraint, numbered |
 | [Cursor contract](cursor.md) | The positioned cursor `bytescan/cursor`: positions, checkpoints and replay, retention and its bound, checkpoint reuse, rune sources, byte mode, and the limits of the basic reader |
+| [Resumable lexing](resumable-lexing.md) | Lexing text that changes after it was lexed: the layers, the contract of each piece ("need more input", the mode state, the lookahead record, the lexer with state `statelex`, the change message, the queries), the table of edit cases, and what the REPL and the highlighter examples must be able to do |
 
 ## Status convention
 
@@ -101,6 +102,15 @@ above `Next()`: the `modes` package runs several scanners in turn over one
 shared cursor, a `Source` filter such as `Skip` reads one stream of tokens
 and returns another, and `bytesource` reads a byte stream. See
 [Layers above `Next()`](layers.md).
+
+**Current contract.** The lexer with state is a layer above `Next()` for text
+that changes after it was lexed, such as a line in a REPL or a document in an
+editor. The optional package `statelex` holds a text and its tokens. It takes
+one edit at a time (`Lexer.Apply`), lexes again only the tokens that the edit
+can change, and returns what changed (`Change`). The core does not import it
+(`TestCoreDoesNotImportStatelex`). See
+[The lexer with state](layers.md#the-lexer-with-state-statelex) and
+[Resumable lexing](resumable-lexing.md).
 
 **Intended capability.** On top of that core, the toolkit is intended to offer
 the rule tools that have not shipped: named rules that can be referenced by

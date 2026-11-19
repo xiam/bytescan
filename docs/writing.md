@@ -72,6 +72,13 @@ a reader is likely to open its directory first.
 - A spec section and the prose that restates it change together: when one
   changes, review the other in the same change.
 
+## Links in published files
+
+Published files are every file that the release exports: the README, `docs/`,
+`docs/specs/`, the code and the tests. They link to no internal host, and
+internal context goes into tickets, not into published text
+(`TestPublishedFilesLinkNoInternalHost`).
+
 ## Moving a fact
 
 When you remove a fact from a README, keep it: move it to the page of the

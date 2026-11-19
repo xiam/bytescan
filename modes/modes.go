@@ -25,10 +25,18 @@
 // Use hold one mutex. Cache applies rule 2 for drivers that build a scanner per
 // key, such as a delimiter, a terminator or a bracket level.
 //
-// The driver decides only which scanner is active. The state that picks the next
+// A Driver decides only which scanner is active. The state that picks the next
 // mode, such as the position in a line or the level of a bracket, belongs to
 // the code that uses the driver: a SwitchFunc reads it and returns the next
 // scanner.
+//
+// A ModeSet holds the mode state itself, as a Stack of mode names. Each rule of
+// a mode says what happens to the stack after its token: stay, push a named
+// mode, or pop. Its StackDriver applies these actions and follows rules 1 and
+// 3, and it builds one scanner per mode, which follows rule 2. The state at the
+// start of each token is a plain value: it can be saved with an assignment,
+// compared with Equal, and given to ModeSet.Driver to start a scan at that
+// token.
 package modes
 
 import (

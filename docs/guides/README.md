@@ -17,7 +17,7 @@ Start with the first one and move down only when a question below says so.
 | --- | --- | --- | --- |
 | **Rules only** | One rule set classifies every token, wherever it is. | `bytescan.New`, the rules of `rules/core`, `rules/base`, `rules/special`, `rules/octet` | [json](https://github.com/xiam/bytescan-examples/tree/main/json), [slip](https://github.com/xiam/bytescan-examples/tree/main/streams/slip) |
 | **A filter** | A token depends on the tokens before it, not on the characters: inserted semicolons, `INDENT` and `DEDENT`, dropped comments. | `bytescan.Source`, `bytescan.Skip`, `Token.WithType`, `bytescan.NewEmptyToken` | [go](https://github.com/xiam/bytescan-examples/tree/main/go), [python](https://github.com/xiam/bytescan-examples/tree/main/python), [ansi](https://github.com/xiam/bytescan-examples/tree/main/ansi) |
-| **A mode driver** | The same characters classify differently in different contexts: inside a string, after an opener, at one place in a line. | [`modes`](../../modes): `modes.New`, `Use`, `WithSwitch`, `modes.Cache` | [lua](https://github.com/xiam/bytescan-examples/tree/main/lua), [typescript](https://github.com/xiam/bytescan-examples/tree/main/typescript), [sse](https://github.com/xiam/bytescan-examples/tree/main/streams/sse) |
+| **A mode driver** | The same characters classify differently in different contexts: inside a string, after an opener, at one place in a line. | [`modes`](../../modes): `modes.New`, `Use`, `WithSwitch`, `modes.Cache`; `modes.NewModeSet` for a stack of mode names | [lua](https://github.com/xiam/bytescan-examples/tree/main/lua), [typescript](https://github.com/xiam/bytescan-examples/tree/main/typescript), [sse](https://github.com/xiam/bytescan-examples/tree/main/streams/sse) |
 | **A driver read** | The data says how long the next field is: a length prefix, an offset, a size in a header. | [`bytesource`](../../bytesource): `Fields`, `Field.MaxPiece`, `Read`, `Peek` | [mqtt](https://github.com/xiam/bytescan-examples/tree/main/streams/mqtt), [zip](https://github.com/xiam/bytescan-examples/tree/main/binary/zip) |
 | **Piped scanners** | The text of some tokens is a stream in another format. | two cursors and an `io.Reader` between them | [ssejson](https://github.com/xiam/bytescan-examples/tree/main/streams/ssejson) |
 
@@ -37,6 +37,10 @@ Start with the first one and move down only when a question below says so.
 5. **Does a number in the data give the length of what follows?** Use a driver
    read: the rules lex the header, and the driver reads the field.
 6. **Is one format carried inside the values of another?** Pipe two scanners.
+7. **Does a user edit the text after it was lexed, in an editor or a REPL?**
+   Write the rules as a `modes.ModeSet`, with rules only or with modes, and
+   hold the text in the lexer with state ([`statelex`](../../statelex)). See
+   [text-that-changes.md](text-that-changes.md).
 
 ## Guides by use case
 
@@ -51,6 +55,7 @@ Start with the first one and move down only when a question below says so.
 | Fixed-size packets with a sync marker (MPEG-TS) | [sync-marker.md](sync-marker.md) | a mode driver and a driver read |
 | Escape-framed bytes (SLIP) | [escape-framed.md](escape-framed.md) | rules only |
 | One format nested in another (JSON inside SSE) | [nested-formats.md](nested-formats.md) | piped scanners |
+| Text that a user edits (an editor, a REPL) | [text-that-changes.md](text-that-changes.md) | the lexer with state |
 
 [operations.md](operations.md) covers what every scanner of a stream needs:
 the per-token guard (`WithMaxTokenBytes`), `Release`, retention, and soak

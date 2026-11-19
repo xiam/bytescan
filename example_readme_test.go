@@ -8,9 +8,11 @@ import (
 
 	"github.com/xiam/bytescan"
 	"github.com/xiam/bytescan/bytesource"
+	"github.com/xiam/bytescan/modes"
 	"github.com/xiam/bytescan/rules/base"
 	"github.com/xiam/bytescan/rules/core"
 	"github.com/xiam/bytescan/rules/octet"
+	"github.com/xiam/bytescan/statelex"
 )
 
 // The examples in this file hold the code of the README, so that every code
@@ -80,4 +82,32 @@ func Example_binary() {
 	// 6 ESC_ESC 2 db dd
 	// 8 DATA 1 ff
 	// 9 END 1 c0
+}
+
+// Example_edit is the third README example, in the section "Text that
+// changes".
+func Example_edit() {
+	ms := modes.NewModeSet("text")
+	ms.Mode("text").
+		Rule("WORD", core.RuneRun(core.ASCIILetter)).
+		Rule("SPACE", core.RuneRun(core.RuneSet(" ")))
+
+	lx, err := statelex.New(ms)
+	if err != nil {
+		panic(err)
+	}
+	if _, err := lx.Apply(statelex.Insert(0, []byte("hello world"))); err != nil {
+		panic(err)
+	}
+
+	// The user types "big " before "world".
+	ch, err := lx.Apply(statelex.Insert(6, []byte("big ")))
+	if err != nil {
+		panic(err)
+	}
+	fmt.Println("new tokens:", ch.Inserted)
+	fmt.Println("the later tokens move by", ch.Shift())
+	// Output:
+	// new tokens: [{WORD 6 9} {SPACE 9 10}]
+	// the later tokens move by 4
 }

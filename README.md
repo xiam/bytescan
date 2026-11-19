@@ -142,6 +142,48 @@ label pieces of it by their shape before all of it has arrived. For example:
 - A live log, read as the messages come in: [syslog](https://github.com/xiam/bytescan-examples/tree/main/streams/syslog).
 - The output of a running program, with its color codes: [ansi](https://github.com/xiam/bytescan-examples/tree/main/ansi).
 
+Use it also when a user edits the text after it was lexed, such as a line in a
+REPL or a document in an editor: see [Text that changes](#text-that-changes).
+
+## Text that changes
+
+The lexer with state, [`statelex`](https://pkg.go.dev/github.com/xiam/bytescan/statelex),
+keeps a text and its tokens, and tells you which tokens an edit changed.
+
+```go
+ms := modes.NewModeSet("text")
+ms.Mode("text").
+	Rule("WORD", core.RuneRun(core.ASCIILetter)).
+	Rule("SPACE", core.RuneRun(core.RuneSet(" ")))
+
+lx, err := statelex.New(ms)
+if err != nil {
+	panic(err)
+}
+if _, err := lx.Apply(statelex.Insert(0, []byte("hello world"))); err != nil {
+	panic(err)
+}
+
+// The user types "big " before "world".
+ch, err := lx.Apply(statelex.Insert(6, []byte("big ")))
+if err != nil {
+	panic(err)
+}
+fmt.Println("new tokens:", ch.Inserted)
+fmt.Println("the later tokens move by", ch.Shift())
+```
+
+Output:
+
+```
+new tokens: [{WORD 6 9} {SPACE 9 10}]
+the later tokens move by 4
+```
+
+The code runs as `Example_edit` in [`example_readme_test.go`](example_readme_test.go),
+with its imports. To build a highlighter or a REPL with it, read
+[Lexing text that changes](docs/guides/text-that-changes.md).
+
 ## What you can build
 
 Each item links to one of about thirty working programs in
@@ -162,6 +204,7 @@ Each item links to one of about thirty working programs in
 | [`cursor`](cursor/README.md) | Reads text or bytes and tracks the position of every read. It works on its own. |
 | [`bytesource`](bytesource/README.md) | Lets the scanner read bytes, and reads fields whose length is in the data. |
 | [`modes`](https://pkg.go.dev/github.com/xiam/bytescan/modes) | Switches between rule sets, for example inside and outside a string. See [the guides](docs/guides/README.md). |
+| [`statelex`](https://pkg.go.dev/github.com/xiam/bytescan/statelex) | Keeps a text and its tokens, and tells you which tokens an edit changed. See [text that changes](docs/guides/text-that-changes.md). |
 | [`rules`](rules/README.md) | Ready-made rules in four packages: `core` (building blocks), `base` (common tokens of code and text), `special` (URLs, email addresses, emoji) and `octet` (byte values). |
 | [`streamtest`](https://pkg.go.dev/github.com/xiam/bytescan/streamtest) | Tests that your scanner reads a long stream in bounded memory. See [long streams](docs/guides/operations.md). |
 
@@ -171,6 +214,7 @@ Each item links to one of about thirty working programs in
   for your own format.
 - [The rules](docs/rules.md) and [how to write your own](docs/rule-authoring.md).
 - [Long streams, bounds and memory](docs/guides/operations.md).
+- [Lexing text that changes](docs/guides/text-that-changes.md): an editor or a REPL.
 - [How the scanner works](docs/guides/how-it-works.md): positions, context and what
   each part does.
 - [The specification](docs/specs/core-contract.md): the exact contract.

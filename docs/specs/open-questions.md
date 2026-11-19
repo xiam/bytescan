@@ -91,6 +91,38 @@ number there.
   [design principles](design-principles.md#vm-design-principles) do not change.
   ([Purpose and scope](core-contract.md#purpose-and-scope))
 
+Questions 16 to 30 come from the contract for
+[resumable lexing](resumable-lexing.md). They share one constraint: a
+consumer that reads a stream and never goes back pays nothing for an answer,
+in memory for each token or in the speed of `Next()`. The owner answered
+questions 16 to 21, 23 to 26 and 28 to 30 on 2026-11-18; they are under
+[Closed](#closed). Questions 22 and 27 stay open, deferred by the owner.
+
+- <a name="question-22"></a>**22. State that is not a stack of mode names** — some
+  formats need more than a stack: a heredoc terminator or a raw-string
+  delimiter (one value), a field whose length is stored in the data
+  (`bytesource.Fields`), or a scanner nested in another scanner's token. The
+  owner deferred one extra value slot until a real example needs it. The
+  question is which of these the lexer with state will support, and how. The
+  constraint: the state stays a plain value that bytescan can copy and
+  compare without the caller's help.
+  ([The mode state](resumable-lexing.md#the-mode-state))
+
+- <a name="question-27"></a>**27. Bounded work for one edit** — an edit that changes
+  the mode state (an opening quote typed at the top of a large file) can
+  have no sync point before the end of the text. The question is whether the
+  lexer with state can stop early and report "the tokens from offset X on
+  are not valid yet", and continue later. The constraint: the implementer
+  never reads a token that is not valid as if it were valid, and the final
+  tokens are the same as without the bound. **Deferred by the owner**
+  (2026-11-18): it is not part of the milestone of the lexer with state, and
+  an edit with no sync point re-lexes to the end of the text. The reason: the
+  examples of that milestone hold small texts, optimization comes after the
+  final feature set, and a bound touches the change, the queries and the
+  errors, so it is designed once, with a real case of a large text.
+  ([What the cases show](resumable-lexing.md#what-the-cases-show),
+  [A bound on the work of one edit](resumable-lexing.md#a-bound-on-the-work-of-one-edit))
+
 ## Closed
 
 These are in the [decision log](design-principles.md#closed-design-questions):
@@ -101,3 +133,16 @@ These are in the [decision log](design-principles.md#closed-design-questions):
 - **11. Synthetic-token / progress semantics** — closed by `NewEmptyToken` and filters ([question 11](design-principles.md#question-11)).
 - **12. Core/extension seam** — closed by `Source` ([question 12](design-principles.md#question-12)).
 - **13. `\r\n` post-sequence line/column** — closed, pinned by `TestCodeNewlinePositions`; the open part is question 5 ([question 13](design-principles.md#question-13)).
+- **16. Complete tokens and the true end of input** — closed 2026-11-18 ([question 16](design-principles.md#question-16)).
+- **17. The end of the held text** — closed 2026-11-18 ([question 17](design-principles.md#question-17)).
+- **18. Positional flags at a restart and at a sync point** — closed 2026-11-18 ([question 18](design-principles.md#question-18)).
+- **19. Starting a scan at a position and in a state** — closed 2026-11-18 ([question 19](design-principles.md#question-19)).
+- **20. The lookahead record** — closed 2026-11-18 ([question 20](design-principles.md#question-20)).
+- **21. The mode stack and the `modes` package** — closed 2026-11-18 ([question 21](design-principles.md#question-21)).
+- **23. The edit request, the change, the constructor and the names** — closed 2026-11-18 ([question 23](design-principles.md#question-23)).
+- **24. Which tokens count as unchanged in a change** — closed 2026-11-18 ([question 24](design-principles.md#question-24)).
+- **25. Lines, columns and rune offsets after an edit** — closed 2026-11-18 ([question 25](design-principles.md#question-25)).
+- **26. Edit units** — closed 2026-11-18 ([question 26](design-principles.md#question-26)).
+- **28. Reading the lexer state** — closed 2026-11-18 ([question 28](design-principles.md#question-28)).
+- **29. Errors while re-lexing** — closed 2026-11-18 ([question 29](design-principles.md#question-29)).
+- **30. Packaging, the token store and the build order** — closed 2026-11-18 ([question 30](design-principles.md#question-30)).
