@@ -4,7 +4,9 @@ A scanner that reads a stream that may never end must hold constant memory and
 keep going after corrupt data. This page covers the four tools for that: the
 per-token guard, `Release`, the cursor's retention budget, and soak tests
 with [`streamtest`](../../streamtest). The contract is in
-[specs/resources-and-streams.md](../specs/resources-and-streams.md).
+[specs/resources-and-streams.md](../specs/resources-and-streams.md). The
+section [Ask for more input](#ask-for-more-input) shows how a scanner for a
+REPL asks for more input instead of waiting.
 
 ## The per-token guard: `WithMaxTokenBytes`
 
@@ -176,6 +178,105 @@ go test -timeout 0 -run Long ./path/to/package -streamtest.long
 Throughput is logged, not asserted. Under the race detector a scanner reads
 about 0.1 MiB/s, so keep the default budgets for `go test -race`. The
 harness self-test has a known, open flake under `-race`.
+
+## Ask for more input
+
+A REPL reads a line, lexes it, and waits for the next line. When a string or
+a comment is still open at the end of a line, it prints a continuation
+prompt. To do that, the scanner must not wait inside `Next`, and it must not
+treat the end of the line as the end of the input.
+
+Give the scanner a source that never blocks. When the source has no input
+now, its `Read` returns `cursor.ErrMoreInput`. When the input really ends, it
+returns `io.EOF`. `Next` then returns every token that the rules can decide,
+and after them `bytescan.ErrMoreInput`. Compare it with `==`, as `io.EOF`.
+
+```go
+in := &typed{}
+lx := bytescan.NewWithCursor(cursor.NewReader(in))
+lx.MustAddRule("STRING", base.QuotedMultiline('"', '\\'))
+lx.MustAddRule("WORD", base.Word())
+lx.MustAddRule("WS", base.Whitespace())
+lx.MustAddRule("NL", base.Newline())
+
+fed, lexed := 0, 0
+prompt := "> "
+for _, line := range []string{"say \"hello\n", "world\"\n", "bye\n"} {
+	fmt.Print(prompt, line) // the user types a line
+	in.buf = append(in.buf, line...)
+	fed += len(line)
+
+	for {
+		tok, err := lx.Next()
+		if err == bytescan.ErrMoreInput {
+			break // no token can be decided until the next line
+		}
+		if err != nil {
+			fmt.Println("error:", err)
+			return
+		}
+		lexed = tok.Span().End().ByteOffset()
+		fmt.Printf("  %s %q\n", tok.Type(), tok.Text())
+	}
+
+	// A token is still open when typed bytes are not in a token yet.
+	prompt = "> "
+	if lexed < fed {
+		prompt = "... "
+	}
+}
+
+in.ended = true // the user ends the session
+for {
+	tok, err := lx.Next()
+	if err == io.EOF {
+		break
+	}
+	if err != nil {
+		fmt.Println("error:", err)
+		return
+	}
+	fmt.Printf("  %s %q\n", tok.Type(), tok.Text())
+}
+```
+
+It prints:
+
+```text
+> say "hello
+  WORD "say"
+  WS " "
+... world"
+  STRING "\"hello\nworld\""
+  NL "\n"
+> bye
+  WORD "bye"
+  NL "\n"
+```
+
+The code is `Example_guideMoreInput` in
+[`example_guides_test.go`](../../example_guides_test.go). The source `typed`
+is in the same file. Its `Read` returns the typed bytes, then
+`cursor.ErrMoreInput`, and `io.EOF` after `ended` is set.
+
+- **A token is returned only when the rules decided it.** After `say "hello`
+  the string is open, so `Next` returns `WORD` and `WS` and then the signal.
+  The open string is not returned. The next call lexes it again from its
+  start, with the new line.
+- **The rules never see a false end.** The rules see the end of input only
+  when the source returns `io.EOF`. Then the last token is decided as on any
+  other input, and `Next` returns `io.EOF`.
+- **The signal does not stick.** After `ErrMoreInput`, add input and call
+  `Next` again. The cursor asks the source again.
+- **Filters and mode drivers pass it on.** `bytescan.Skip` and
+  `modes.Driver` return the signal unchanged.
+- **The guard still applies.** `WithMaxTokenBytes` fails an open token that
+  grows past the bound, as on any other input.
+- **A source that never returns the signal works as before.** Such a scanner
+  does not change.
+
+The exact contract is in
+[Need more input](../specs/resumable-lexing.md#need-more-input).
 
 ## A checklist for a stream scanner
 

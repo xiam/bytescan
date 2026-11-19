@@ -312,6 +312,12 @@ capability lexes identically but still allocates a checkpoint per token).
 
   - The end of input is `io.EOF` itself, not a wrapped error, so
     `err == io.EOF` holds, before and after `Release`.
+  - When the source has no input now, it can return `cursor.ErrMoreInput`.
+    `Next` then returns `ErrMoreInput`, a second name for the same value,
+    not wrapped, so `err == bytescan.ErrMoreInput` holds
+    (`TestMoreInputDistinctSignal`). The call consumes nothing, and the rules
+    are not shown an end of input. See
+    [Need more input](resumable-lexing.md#need-more-input).
   - An error from the caller's reader or cursor, and an error from committing
     the cursor, is wrapped with `%w`, so `errors.Is` matches the original
     error.
@@ -321,6 +327,11 @@ capability lexes identically but still allocates a checkpoint per token).
   - An error from the cursor's `Context`, such as
     `cursor.ErrPositionOutOfBuffer`, is returned unchanged.
   - `Release` cannot fail, and the scanner stays usable after it.
+- **The second method.** `NextLookahead` returns the tokens and the errors of
+  `Next`, and it consumes the same input. It also returns a record of how far
+  the rules read for the token, and the zero record with an error
+  (`TestNextLookaheadMatchesNext`). See
+  [The lookahead record](resumable-lexing.md#the-lookahead-record).
 
 **Evidence.** `TestScannerErrorIdentities` (each sentinel, plain `io.EOF` before
 and after `Release`, both retention failures, an injected cursor error, and a

@@ -38,6 +38,36 @@ byte offset by its size (`Pos`; `TestCursorPositions`,
 `example_readme_test.go`). `Reader.Pos()` returns a `position.Position` whose
 `Offset` counts bytes and whose `Column` counts runes (`TestReader`).
 
+**Current contract — a start in the middle of a text** (owner decision,
+2026-11-18, [question 19](design-principles.md#question-19)).
+`func (r *Reader) ResetStart(src io.Reader, s Start) error` resets a reader
+onto a new source. The reader then reports positions counted from that
+start: byte offset 0, rune offset 0, line 1, column 0
+(`TestResetStartReportsPositionsFromTheRestart`). `type Start struct{
+InText, LineStart bool }` carries the two facts that the scanner turns into
+the BOF and BOL flags of the first symbol. `func (r *Reader) Start() Start`
+returns the stored `Start` (owner decision, 2026-11-18).
+A reset drops the buffered input, the sticky read error and any partial UTF-8
+sequence of the old source, keeps the options and byte mode, and releases
+every active checkpoint (`TestResetStartDropsTheOldSource`,
+`TestResetStartReportsPositionsFromTheRestart`,
+`TestResetStartReleasesCheckpoints`, `TestResetStartLeavesNoRetentionLimit`).
+A multi-byte character that the old source cut with `ErrMoreInput` is dropped
+too, and no "more input" condition survives the reset, because `ErrMoreInput`
+is not sticky (`TestResetStartDropsAHeldCutRune`). A reader built with
+`NewRuneReader` reads the new source as UTF-8 bytes
+(`TestResetStartDropsTheOldSource`, subtest `rune source`). An empty source
+reads `io.EOF` at offset 0 (`TestResetStartEmptySource`).
+`ResetStart` fails only on a nil source, and then it changes nothing
+(`TestResetStartRefusesANilSource`).
+
+**Current contract — a reader that is never reset.** A reader that is never
+reset starts at offset 0, line 1, column 0, as the first statement of this
+section says, and its `Start` is `Start{LineStart: true}`,
+the start of a whole text (`TestResetStartStoresTheStart`). What the scanner
+does with the flags is in
+[Starting a scan in the middle](resumable-lexing.md#starting-a-scan-in-the-middle).
+
 **Current contract.** A `Span` is an immutable half-open range built with
 `NewSpan`. A `LocatedRune`, returned by `ReadLocatedRune`, is a rune with the
 position it was read from. `PeekRune` reports the rune at the cursor without
@@ -196,6 +226,28 @@ from a checkpoint reproduces the same error, not whatever the source would
 report on a second pass (`TestReaderErrorReplaysDeterministically`,
 `TestRuneReaderErrorReplays`).
 
+**Current contract — "no input now"** (owner decision, 2026-11-18,
+[question 16](design-principles.md#question-16)). The package
+defines a sentinel, `ErrMoreInput`, that a source returns when it has no
+input now. A source that waits inside `Read` instead still blocks the read,
+as the contract above says. Unlike the other errors of a source,
+`ErrMoreInput` is not sticky: the next read asks the source again
+(`TestMoreInputNotSticky`). A read that gets it returns it and does not move
+the cursor. A proper prefix of a multi-byte sequence stays held when the
+source returns it, and is not decoded as at `io.EOF`
+(`TestMoreInputCutRuneStaysHeld`, `TestMoreInputCheckpointReplay`). Bytes
+that arrive together with the signal are read first: a rune read returns the
+rune they complete (`TestMoreInputWithData`, `TestMoreInputByteMode`), and a
+bulk `Read` returns them with no error and returns the signal on a later call
+when no byte is left. The bulk `Read` does not settle the carried bytes of a
+cut character on the signal (`TestMoreInputBulkRead`). A forward `Seek`
+uses the bytes that arrive with the signal: it fails with the signal only
+when they do not reach the target, and then it does not move the cursor
+(`TestMoreInputSeek`). A rune source returns
+the signal from `ReadRune` (`TestMoreInputRuneSource`). The reader matches
+the signal with `errors.Is`. See
+[Need more input](resumable-lexing.md#need-more-input).
+
 ## Byte mode
 
 **Current contract.** `NewByteReader` builds the same cursor for binary input.
@@ -221,13 +273,58 @@ does not wait for more input (`TestByteReaderDoesNotWaitForMoreBytes`).
 
 ## Limits of the basic reader
 
-**Current contract.** `Seek` moves only within the data in the reader's
-buffer. Unlike `os.File.Seek`, it cannot reach an arbitrary position of the
-underlying stream, and it never moves the underlying `io.Reader`. A seek
-outside the buffer fails with `ErrSeekOutOfBuffer`, so `Seek(0, io.SeekStart)`
-fails once the start of the stream has left the buffer (`Reader.Seek`;
-`TestReader`, `TestReaderEdgeCases`; the case of a start that has left the
-buffer has **no test yet**).
+**Current contract.** A forward `Seek` to a position that the buffer does not
+hold yet reads the bytes in between from the source, so `Seek` does not move
+only within the buffer. It counts those bytes into the position: the position
+after the seek equals the position after reading the same bytes
+(`TestSeekForwardReadsFromSource`; `TestReader`, subtest `seeker`). Unlike
+`os.File.Seek`, `Seek` cannot reach an arbitrary position of the underlying
+stream, and it never moves the underlying `io.Reader` (`Reader.Seek`).
+
+**Current contract.** A `Seek` to a target that the buffer cannot hold fails.
+`Seek` first computes the absolute stream offset of the target, for every
+`whence`. The error depends only on that target
+(`TestSeekWhenceTargets`; `Reader.Seek`):
+
+- A target before stream offset 0 fails with the error "cursor: negative
+  position", for every `whence`. This error is not `ErrSeekOutOfBuffer`
+  (`TestSeekNegativePositionDoesNotMove`; `TestReaderEdgeCases`, subtest
+  `Seek_Errors`).
+- A target at or after offset 0 but before the start of the buffer fails with
+  `ErrSeekOutOfBuffer`, for every `whence`. So `Seek(0, io.SeekStart)` fails
+  once the start of the stream has left the buffer
+  (`TestSeekOutOfBufferDoesNotMove`).
+- A forward target that the buffer cannot hold fails with
+  `ErrSeekOutOfBuffer`, and so does a target after the end of the input
+  (`TestSeekOutOfBufferDoesNotMove`, `TestReaderEdgeCases`).
+- While a checkpoint holds input, a forward target past the retention limit
+  fails with `ErrRetentionExceeded`
+  (`TestSeekFailedForwardKeepsSplitRunePending`).
+- A forward target that needs bytes from a source that fails has two
+  outcomes. With no unread byte in the buffer, `Seek` returns the source
+  error, wrapped. With unread bytes in the buffer, the reader serves those
+  bytes first: `Seek` fails with `ErrSeekOutOfBuffer`, and a later read
+  returns the source error
+  (`TestSeekFailedOnSourceErrorKeepsSplitRunePending`; `Reader.fillAtLeast`).
+
+**Current contract.** A failed `Seek` does not move the position, for every
+`whence` and every error. The byte offset, the rune offset, the line and the
+column stay the same (`TestSeekWhenceTargets`,
+`TestSeekOutOfBufferDoesNotMove`, `TestSeekNegativePositionDoesNotMove`,
+`TestSeekFailedOnSourceErrorKeepsSplitRunePending`).
+This also holds after a `Read` that stopped inside a multi-byte UTF-8
+sequence. The bytes already read of that sequence stay pending, and the
+`Read` of its last bytes counts it as one rune
+(`TestSeekFailedForwardKeepsSplitRunePending`). After a failed `Seek`, the
+next successful `Read`, `ReadRune` or `Seek` gives the same position as it
+gives without the failed `Seek` (`TestSeekFailedThenNextOperation`). To reach
+a forward target, a failed `Seek` can still have read ahead from the source
+into the buffer. That read-ahead does not change the position.
+
+**Current contract.** A `Seek` that moves settles a pending partial sequence
+first: each byte already read of that sequence counts as one rune. A `Seek`
+to the current position does nothing, and the sequence stays pending
+(`TestSeekFailedThenNextOperation`, `TestNonConsumingCallsDoNotMoveTheCursor`).
 
 **Current contract.** `UnreadRune` undoes only the most recent `ReadRune`. A
 second `UnreadRune` without a read in between fails with

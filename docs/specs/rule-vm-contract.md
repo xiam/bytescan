@@ -261,7 +261,13 @@ Loop" uses it and asserts that lexing terminates.
 
 **Current contract.** The engine feeds a **synthetic EOF symbol** (carrying
 `RuneEOF` and `FlagEOF`, not part of the input) to the rules once the underlying
-reader is exhausted. This lets a rule observe end-of-input. No input follows
+reader is exhausted: the source returned `io.EOF`. This lets a rule observe
+end-of-input. A source that returns `cursor.ErrMoreInput` has not ended: the
+engine shows no EOF symbol, and `Next` returns the signal instead
+(`TestMoreInputNoFalseEnd`;
+[Need more input](resumable-lexing.md#need-more-input)). A scanner whose
+source never returns that signal sees the end of the source as the end of
+input. No input follows
 the EOF symbol, so after it the VM retires every rule that is still active —
 through `StateContinue`, or through a non-nil `next` with `StateAccept`.
 `Process` therefore always decides on the EOF symbol. Each rule contributes the

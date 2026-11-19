@@ -10,10 +10,13 @@ import (
 
 	"github.com/xiam/bytescan"
 	"github.com/xiam/bytescan/bytesource"
+	"github.com/xiam/bytescan/cursor"
+	"github.com/xiam/bytescan/modes"
 	"github.com/xiam/bytescan/rules/base"
 	"github.com/xiam/bytescan/rules/core"
 	"github.com/xiam/bytescan/rules/octet"
 	"github.com/xiam/bytescan/rules/special"
+	"github.com/xiam/bytescan/statelex"
 )
 
 // The examples in this file hold the code of the guides under docs/guides, so
@@ -369,4 +372,356 @@ func Example_guideSpans() {
 	// 7
 	// 3
 	// 3
+}
+
+// typed is the input of a REPL in Example_guideMoreInput: the lines typed so
+// far. Read never blocks. It returns cursor.ErrMoreInput when no typed input
+// is left, and io.EOF after the user ends the session.
+type typed struct {
+	buf   []byte
+	ended bool
+}
+
+func (t *typed) Read(p []byte) (int, error) {
+	if len(t.buf) == 0 {
+		if t.ended {
+			return 0, io.EOF
+		}
+		return 0, cursor.ErrMoreInput
+	}
+	n := copy(p, t.buf)
+	t.buf = t.buf[n:]
+	return n, nil
+}
+
+// Example_guideMoreInput is the code of the section "Ask for more input" of
+// docs/guides/operations.md.
+func Example_guideMoreInput() {
+	in := &typed{}
+	lx := bytescan.NewWithCursor(cursor.NewReader(in))
+	lx.MustAddRule("STRING", base.QuotedMultiline('"', '\\'))
+	lx.MustAddRule("WORD", base.Word())
+	lx.MustAddRule("WS", base.Whitespace())
+	lx.MustAddRule("NL", base.Newline())
+
+	fed, lexed := 0, 0
+	prompt := "> "
+	for _, line := range []string{"say \"hello\n", "world\"\n", "bye\n"} {
+		fmt.Print(prompt, line) // the user types a line
+		in.buf = append(in.buf, line...)
+		fed += len(line)
+
+		for {
+			tok, err := lx.Next()
+			if err == bytescan.ErrMoreInput {
+				break // no token can be decided until the next line
+			}
+			if err != nil {
+				fmt.Println("error:", err)
+				return
+			}
+			lexed = tok.Span().End().ByteOffset()
+			fmt.Printf("  %s %q\n", tok.Type(), tok.Text())
+		}
+
+		// A token is still open when typed bytes are not in a token yet.
+		prompt = "> "
+		if lexed < fed {
+			prompt = "... "
+		}
+	}
+
+	in.ended = true // the user ends the session
+	for {
+		tok, err := lx.Next()
+		if err == io.EOF {
+			break
+		}
+		if err != nil {
+			fmt.Println("error:", err)
+			return
+		}
+		fmt.Printf("  %s %q\n", tok.Type(), tok.Text())
+	}
+	// Output:
+	// > say "hello
+	//   WORD "say"
+	//   WS " "
+	// ... world"
+	//   STRING "\"hello\nworld\""
+	//   NL "\n"
+	// > bye
+	//   WORD "bye"
+	//   NL "\n"
+}
+
+// Example_guideEdit is the first code block of
+// docs/guides/text-that-changes.md: build the lexer, load a text, make one
+// edit and read the change.
+func Example_guideEdit() {
+	ms := modes.NewModeSet("code")
+	ms.Mode("code").
+		Rule("WORD", core.RuneRun(core.ASCIILetter)).
+		Rule("WS", core.RuneRun(core.RuneSet(" "))).
+		Rule("NL", core.Literal("\n"))
+
+	lx, err := statelex.New(ms)
+	if err != nil {
+		panic(err)
+	}
+
+	// Loading the text is one edit of an empty lexer.
+	ch, err := lx.Apply(statelex.Insert(0, []byte("foo bar\n")))
+	if err != nil {
+		panic(err)
+	}
+	fmt.Println("loaded:", ch.Inserted)
+
+	// The user deletes the space: "foo bar" becomes "foobar".
+	ch, err = lx.Apply(statelex.Delete(3, 4))
+	if err != nil {
+		panic(err)
+	}
+	fmt.Println("removed:", ch.Removed)
+	fmt.Println("inserted:", ch.Inserted)
+	fmt.Println("shift:", ch.Shift())
+	// Output:
+	// loaded: [{WORD 0 3} {WS 3 4} {WORD 4 7} {NL 7 8}]
+	// removed: [{WORD 0 3} {WS 3 4} {WORD 4 7}]
+	// inserted: [{WORD 0 6}]
+	// shift: -1
+}
+
+// Example_guideHighlighter is the second code block of
+// docs/guides/text-that-changes.md: a highlighter that keeps its own list of
+// painted tokens and updates it from each change.
+func Example_guideHighlighter() {
+	ms := modes.NewModeSet("code")
+	ms.Mode("code").
+		Rule("WORD", core.RuneRun(core.ASCIILetter)).
+		Rule("OP", core.AnyLiteral("=", "+")).
+		Rule("WS", core.RuneRun(core.RuneSet(" "))).
+		Rule("NL", core.Literal("\n"))
+
+	lx, err := statelex.New(ms)
+	if err != nil {
+		panic(err)
+	}
+
+	// The highlighter keeps the tokens it painted, in order.
+	var painted []statelex.Token
+
+	// update applies one change: drop the painted tokens in [Start, OldEnd),
+	// paint the inserted tokens, and move every later token by Shift().
+	update := func(ch statelex.Change) {
+		var next []statelex.Token
+		for _, tok := range painted {
+			if tok.End <= ch.Start {
+				next = append(next, tok)
+			}
+		}
+		next = append(next, ch.Inserted...)
+		for _, tok := range painted {
+			if tok.Start >= ch.OldEnd {
+				tok.Start += ch.Shift()
+				tok.End += ch.Shift()
+				next = append(next, tok)
+			}
+		}
+		painted = next
+		if len(ch.Removed) > 0 {
+			fmt.Printf("  unpaint [%d,%d)\n", ch.Start, ch.OldEnd)
+		}
+		for _, tok := range ch.Inserted {
+			fmt.Printf("  paint %s %q\n", tok.Type, lx.Text(tok.Start, tok.End))
+		}
+	}
+
+	edits := []statelex.Edit{
+		statelex.Insert(0, []byte("total = alpha + beta\n")), // load the text
+		statelex.Delete(12, 13),                              // a backspace after "alpha"
+		statelex.Delete(6, 15),                               // delete a selection
+		{Start: 6, End: 6, Text: []byte("= gamma ")},         // paste
+	}
+	for _, e := range edits {
+		ch, err := lx.Apply(e)
+		if err != nil {
+			panic(err)
+		}
+		fmt.Printf("%q\n", lx.Text(0, lx.Len()))
+		update(ch)
+	}
+
+	// The painted tokens are the tokens of the whole text.
+	fmt.Println(fmt.Sprint(painted) == fmt.Sprint(lx.Tokens(0, lx.Len())))
+	// Output:
+	// "total = alpha + beta\n"
+	//   paint WORD "total"
+	//   paint WS " "
+	//   paint OP "="
+	//   paint WS " "
+	//   paint WORD "alpha"
+	//   paint WS " "
+	//   paint OP "+"
+	//   paint WS " "
+	//   paint WORD "beta"
+	//   paint NL "\n"
+	// "total = alph + beta\n"
+	//   unpaint [8,13)
+	//   paint WORD "alph"
+	// "total beta\n"
+	//   unpaint [6,15)
+	// "total = gamma beta\n"
+	//   paint OP "="
+	//   paint WS " "
+	//   paint WORD "gamma"
+	//   paint WS " "
+	// true
+}
+
+// Example_guidePureRules is the third code block of
+// docs/guides/text-that-changes.md: a rule that keeps a fact in a captured
+// variable gives a wrong change, and a pure rule gives the right one.
+func Example_guidePureRules() {
+	word := core.RuneRun(core.ASCIILetter)
+
+	// TITLE is the first word of the text. This rule remembers that it saw a
+	// word in a captured variable, so it is not pure.
+	seen := false
+	impure := func(s bytescan.Symbol) (bytescan.Rule, bytescan.State) {
+		if seen {
+			return nil, bytescan.StateReject
+		}
+		seen = true
+		return word(s)
+	}
+
+	// This rule reads the BOF flag of its first symbol instead: the flag is
+	// set only at the start of the text. It is pure.
+	pure := func(s bytescan.Symbol) (bytescan.Rule, bytescan.State) {
+		if !s.IsBOF() {
+			return nil, bytescan.StateReject
+		}
+		return word(s)
+	}
+
+	for _, title := range []bytescan.Rule{impure, pure} {
+		ms := modes.NewModeSet("text")
+		ms.Mode("text").
+			Rule("TITLE", title).
+			Rule("WORD", word).
+			Rule("WS", core.RuneRun(core.RuneSet(" ")))
+
+		lx, err := statelex.New(ms)
+		if err != nil {
+			panic(err)
+		}
+		if _, err := lx.Apply(statelex.Insert(0, []byte("hello world"))); err != nil {
+			panic(err)
+		}
+		// The user types a new first word.
+		if _, err := lx.Apply(statelex.Insert(0, []byte("big "))); err != nil {
+			panic(err)
+		}
+		fmt.Println(lx.Tokens(0, lx.Len()))
+	}
+	// Output:
+	// [{WORD 0 3} {WS 3 4} {WORD 4 9} {WS 9 10} {WORD 10 15}]
+	// [{TITLE 0 3} {WS 3 4} {WORD 4 9} {WS 9 10} {WORD 10 15}]
+}
+
+// Example_guideModes is the fourth code block of
+// docs/guides/text-that-changes.md: an opening quote changes the mode of every
+// later token, so the change runs to the end of the text.
+func Example_guideModes() {
+	ms := modes.NewModeSet("code")
+	ms.Mode("code").
+		Rule("WORD", core.RuneRun(core.ASCIILetter)).
+		Rule("WS", core.RuneRun(core.RuneSet(" "))).
+		Rule("NL", core.Literal("\n")).
+		Push("QUOTE", core.Literal(`"`), "str")
+	ms.Mode("str").
+		Rule("TEXT", core.RuneRun(core.RuneSet(`"`).Not())).
+		Pop("QUOTE", core.Literal(`"`))
+
+	lx, err := statelex.New(ms)
+	if err != nil {
+		panic(err)
+	}
+	if _, err := lx.Apply(statelex.Insert(0, []byte("say hi now\n"))); err != nil {
+		panic(err)
+	}
+
+	// The user types an opening quote before "hi".
+	ch, err := lx.Apply(statelex.Insert(4, []byte(`"`)))
+	if err != nil {
+		panic(err)
+	}
+	fmt.Printf("the change covers [%d,%d) of a text of %d bytes\n", ch.Start, ch.NewEnd, lx.Len())
+	fmt.Println("removed:", ch.Removed)
+	fmt.Println("inserted:", ch.Inserted)
+
+	// The user types the closing quote after "hi".
+	ch, err = lx.Apply(statelex.Insert(7, []byte(`"`)))
+	if err != nil {
+		panic(err)
+	}
+	fmt.Println("inserted:", ch.Inserted)
+	// Output:
+	// the change covers [4,12) of a text of 12 bytes
+	// removed: [{WORD 4 6} {WS 6 7} {WORD 7 10} {NL 10 11}]
+	// inserted: [{QUOTE 4 5} {TEXT 5 12}]
+	// inserted: [{TEXT 5 7} {QUOTE 7 8} {WS 8 9} {WORD 9 12} {NL 12 13}]
+}
+
+// Example_guidePrompt is the fifth code block of
+// docs/guides/text-that-changes.md: a REPL that holds its input in the lexer
+// and asks for another line while a string or a comment is open.
+func Example_guidePrompt() {
+	ms := modes.NewModeSet("code")
+	ms.Mode("code").
+		Rule("WORD", core.RuneRun(core.ASCIILetter)).
+		Rule("OP", core.AnyLiteral("/", "*")).
+		Rule("COMMENT", base.BlockComment("/*", "*/")).
+		Rule("WS", core.RuneRun(core.RuneSet(" "))).
+		Rule("NL", core.Literal("\n")).
+		Push("QUOTE", core.Literal(`"`), "str")
+	ms.Mode("str").
+		Rule("TEXT", core.RuneRun(core.RuneSet(`"`).Not())).
+		Pop("QUOTE", core.Literal(`"`))
+
+	lx, err := statelex.New(ms)
+	if err != nil {
+		panic(err)
+	}
+
+	prompt := "> "
+	for _, line := range []string{"say \"hello\n", "world\"\n", "a /* note\n", "end */\n"} {
+		fmt.Print(prompt, line) // the user types a line
+		if _, err := lx.Apply(statelex.Insert(lx.Len(), []byte(line))); err != nil {
+			panic(err)
+		}
+
+		// A string is open when the mode state at the end holds more than
+		// the start mode. A comment is open when a token read the end of
+		// the text.
+		_, unfinished := lx.Unfinished()
+		if lx.ModeAtEnd().Len() > 1 || unfinished {
+			prompt = "... "
+			continue
+		}
+
+		fmt.Printf("run %q\n", lx.Text(0, lx.Len()))
+		if _, err := lx.Apply(statelex.Delete(0, lx.Len())); err != nil {
+			panic(err)
+		}
+		prompt = "> "
+	}
+	// Output:
+	// > say "hello
+	// ... world"
+	// run "say \"hello\nworld\"\n"
+	// > a /* note
+	// ... end */
+	// run "a /* note\nend */\n"
 }

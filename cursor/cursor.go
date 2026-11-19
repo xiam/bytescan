@@ -33,6 +33,18 @@ var (
 	// ErrPositionOutOfBuffer reports that a position or span is outside the
 	// bytes the reader still retains.
 	ErrPositionOutOfBuffer = errors.New("cursor: position outside retained input")
+
+	// ErrMoreInput is the error a source returns from Read or ReadRune when
+	// it has no input now but the input has not ended. The source returns it
+	// instead of blocking, and returns io.EOF only at the true end of input.
+	//
+	// The reader passes the error on and does not keep it: unlike another
+	// error of the source, it is not returned again on the next read, so the
+	// next read asks the source again. A read that fails with ErrMoreInput
+	// does not move the cursor, and the leading bytes of a multi-byte
+	// character cut at the end of the input so far stay held: they are not
+	// read as U+FFFD. The reader matches the error with errors.Is.
+	ErrMoreInput = errors.New("cursor: more input needed")
 )
 
 // Option configures a Reader created by NewReader, NewRuneReader or

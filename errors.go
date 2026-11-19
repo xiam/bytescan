@@ -1,6 +1,20 @@
 package bytescan
 
-import "errors"
+import (
+	"errors"
+
+	"github.com/xiam/bytescan/cursor"
+)
+
+// ErrMoreInput is cursor.ErrMoreInput under a second name. Next returns it,
+// not wrapped, when the source has no input now and the rules have not decided
+// the next token. Compare it with ==, as io.EOF.
+//
+// Next returns every token that the rules decided from the input so far
+// before it returns ErrMoreInput. It does not return the unfinished token:
+// the next call lexes that token again from its start, with the new input.
+// The rules are not shown the end of input until the source returns io.EOF.
+var ErrMoreInput = cursor.ErrMoreInput
 
 // Errors that the scanner itself decides. Each error the package returns for
 // one of these failures matches its sentinel with errors.Is; the message may
@@ -8,7 +22,8 @@ import "errors"
 //
 // Errors that the scanner does not decide keep their identity and get no
 // sentinel of their own: Next returns plain io.EOF (compare with ==) at the
-// end of input; an error from the reader or the cursor is wrapped with %w, so
+// end of input, and plain ErrMoreInput when the source has no input now; an
+// error from the reader or the cursor is wrapped with %w, so
 // errors.Is matches the original error; and an error from the cursor's
 // Context is returned unchanged.
 var (

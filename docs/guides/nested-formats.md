@@ -85,6 +85,87 @@ outer tokens. To return both layers, queue the outer tokens in the pipe and
 return them before the inner token whose read caused them, as the
 [ssejson driver](https://github.com/xiam/bytescan-examples/blob/main/streams/ssejson/driver.go) does.
 
+## One format nested in another on one cursor
+
+When the inner format is a context of the outer text, such as a string in
+code, no second cursor is needed. Use a mode set of package
+[`modes`](../../modes): each mode is a list of rules, and each rule says what
+happens after its token. `Rule` stays in the mode, `Push` enters a named mode,
+and `Pop` goes back to the mode before. The driver keeps the modes on a stack,
+so a format can nest in another as deep as the text goes.
+
+`Stack` returns the mode state at the start of the next token. Save it with an
+assignment, and compare two states with `Equal`. To go on from a token, give
+the saved state to `Driver`, with a cursor at the token.
+
+```go
+word := core.RuneRun(core.RuneRange('a', 'z'))
+quote := core.Literal(`"`)
+
+ms := modes.NewModeSet("code")
+ms.Mode("code").
+	Rule("WORD", word).
+	Rule("WS", core.RuneRun(core.RuneSet(" "))).
+	Push("QUOTE", quote, "str")
+ms.Mode("str").
+	Rule("TEXT", core.RuneRun(core.RuneSet(`"`).Not())).
+	Pop("QUOTE", quote)
+
+text := `say "hi" now`
+d, err := ms.Driver(cursor.New(strings.NewReader(text)), modes.Stack{})
+if err != nil {
+	fmt.Println("error:", err)
+	return
+}
+
+var (
+	saved modes.Stack
+	at    int
+)
+for {
+	st := d.Stack() // the mode state at the start of the next token
+	l, err := d.Next()
+	if err == io.EOF {
+		break
+	}
+	if err != nil {
+		fmt.Println("error:", err)
+		return
+	}
+	fmt.Printf("%-5s %-6q top=%s depth=%d\n", l.Type(), l.Text(), st.Top(), st.Len())
+	if l.Text() == "hi" {
+		saved, at = st, l.Offset()
+	}
+}
+
+// Start again at "hi", in the state saved there.
+d, err = ms.Driver(cursor.New(strings.NewReader(text[at:])), saved)
+if err != nil {
+	fmt.Println("error:", err)
+	return
+}
+l, _ := d.Next()
+fmt.Println("again:", l.Type(), l.Text(), d.Stack().Equal(saved))
+```
+
+The output:
+
+```text
+WORD  "say"  top=code depth=1
+WS    " "    top=code depth=1
+QUOTE "\""   top=code depth=1
+TEXT  "hi"   top=str depth=2
+QUOTE "\""   top=str depth=2
+WS    " "    top=code depth=1
+WORD  "now"  top=code depth=1
+again: TEXT hi true
+```
+
+The code is `ExampleModeSet` in
+[`modes/example_test.go`](../../modes/example_test.go). A pop in the bottom
+mode does nothing, and the scan stays in that mode. The exact contract is
+[The mode state](../specs/resumable-lexing.md#the-mode-state).
+
 ## Rules
 
 Each layer has the rules of its own format: see the guide for each format,

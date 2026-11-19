@@ -7,15 +7,16 @@ The VM keeps no state across tokens
 ([principle 1](design-principles.md#principle-1-stateless-stack-model)) and
 performs no action ([principle 4](design-principles.md#principle-4-the-vm-only-reports-matches)).
 Everything that depends on earlier tokens, or that acts on a token, lives in
-a layer above `Next()`: a filter, a mode driver, or a driver that reads fields
-whose length is stored in the data. This document states the public seam for
-those layers and the packages built on it.
+a layer above `Next()`: a filter, a mode driver, a driver that reads fields
+whose length is stored in the data, or the lexer with state. This document
+states the public seam for those layers and the packages built on it.
 
 ## Contents
 
 - [Filters](#filters)
 - [Lexical modes (`modes`)](#lexical-modes-modes)
 - [Byte reads (`bytesource`)](#byte-reads-bytesource)
+- [The lexer with state (`statelex`)](#the-lexer-with-state-statelex)
 - [Core/extension boundary](#coreextension-boundary)
 - [Post-match actions](#post-match-actions)
 - [No-match handling and recovery](#no-match-handling-and-recovery)
@@ -91,6 +92,24 @@ one: a `modes.Driver` moves the shared cursor from one mode's scanner to
 another's. Context within one token needs no mode; see scenario 3 under
 [Illustrative scenarios](consumer-contract.md#illustrative-scenarios).
 
+**Current contract — a stack of mode names.** For text that changes after it
+was lexed, bytescan defines the shape of the mode state: a stack of mode names,
+`modes.Stack`, that can be copied with an assignment and compared with
+`Stack.Equal`. The rule definitions carry the actions
+([question 21](design-principles.md#question-21)): a `modes.ModeSet` holds
+named modes, and each rule of a mode stays (`Mode.Rule`), pushes a mode
+(`Mode.Push`) or pops (`Mode.Pop`). `ModeSet.Driver` returns a
+`modes.StackDriver`, a `Source` that starts in a given stack and keeps the
+stack. A pop of the last mode does nothing. Evidence: `TestRuleSetB`,
+`TestStackDriverNesting`, `TestStackCopyAndCompare`,
+`TestStackDriverGivenStart`, `TestStackDriverPopLastMode` and
+`ExampleModeSet` (`modes/`); the full contract is in
+[The mode state](resumable-lexing.md#the-mode-state).
+
+What did not change: `Driver`, `SwitchFunc` and `Cache` are the same, and with
+a `Driver` the state that picks a mode still belongs to the code that uses the
+driver. Their tests above pass unchanged.
+
 ## Byte reads (`bytesource`)
 
 **Current contract — byte streams.** The public package `bytesource` is the
@@ -119,6 +138,29 @@ of at most `MaxPiece` bytes; the queue is stepped with `NextField` and is not a
 `TestFields`, `TestFieldsNotSource`, `TestFieldsChunked` and
 `TestFieldsHugeDeclaredLength` (`bytesource/bytesource_test.go`,
 `bytesource/fields_test.go`); `ExampleFields` (`bytesource/example_test.go`).
+
+## The lexer with state (`statelex`)
+
+**Current contract.** The package `statelex` is a layer above `Next()` for
+text that changes after it was lexed. A `statelex.Lexer` holds a text, its
+tokens and, for each token, the mode state at its start. `Lexer.Apply` takes
+one edit, lexes again only the tokens that the edit can change, and returns
+one `Change`: the removed tokens, the inserted tokens, and the shift of every
+later token. After each edit, the held tokens are the tokens of a scan of the
+whole text from its start. The lexer reads its rules from a
+`modes.ModeSet` ([Lexical modes](#lexical-modes-modes)) and drives one
+scanner for each mode over one cursor itself. It supports pure rules only.
+Evidence: `TestGeneratedEdits`, `TestGeneratedEditsModes`, `Example`
+(`statelex/`).
+
+**Reconciled with principle 1.** The VM keeps no state from one token to the
+next. The text, the tokens, the mode state at each token and how far each
+token looked live in the lexer with state, above `Next()`.
+
+The core does not import `statelex`, so a consumer that reads a stream does
+not build it (`TestCoreDoesNotImportStatelex`). The full contract is in
+[Resumable lexing](resumable-lexing.md). How to use it is in the guide
+[Lexing text that changes](../guides/text-that-changes.md).
 
 ## Core/extension boundary
 

@@ -157,6 +157,13 @@ already decodes runes; use `New` or `NewReader` when you have bytes, so that
 only one decoder runs. If the source returns an error, replaying from a
 checkpoint returns the same error again.
 
+A source that has no input now, but has not ended, can return
+`cursor.ErrMoreInput` instead of waiting. That error does not stay: the next
+read asks the source again. A character cut in the middle waits in the
+cursor for its last bytes. The guide
+[Ask for more input](guides/operations.md#ask-for-more-input) shows a scanner
+that uses it.
+
 ## Byte mode
 
 `cursor.NewByteReader(r, opts...)` reads binary data. Each byte is one rune,
@@ -173,9 +180,12 @@ The scanner uses byte mode through
 
 ## Limits
 
-- `Seek` moves only inside the reader's buffer. It cannot reach any place in
-  the stream, as `os.File.Seek` can, and it does not move the underlying
-  reader. `Seek(0, io.SeekStart)` fails once the start has left the buffer.
+- `Seek` reaches only the places that the reader's buffer can hold. A forward
+  `Seek` reads the bytes in between from the source. It cannot reach any
+  place in the stream, as `os.File.Seek` can, and it does not move the
+  underlying reader. `Seek(0, io.SeekStart)` fails once the start has left
+  the buffer. The exact errors are in the
+  [specification](specs/cursor.md#limits-of-the-basic-reader).
 - `UnreadRune` undoes only the last `ReadRune`. To go further back, use `Seek`
   or a checkpoint.
 - The text constructors count lines and columns correctly only for valid
