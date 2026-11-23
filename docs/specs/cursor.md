@@ -24,9 +24,40 @@ path are in `cursor/`.
 
 ## Independence
 
-**Current contract.** The non-test files of `cursor` import only the standard
-library and `cursor/position`. A program can use the cursor without the
-scanner (`TestImportIndependence`).
+**Current contract.** In the normal build, the non-test files of `cursor`
+import only the standard library and `cursor/position`. A program can use the
+cursor without the scanner (`TestImportIndependence`). The file
+`counters_on.go`, which only a build with the tag `bench` compiles, also
+imports `internal/counters` to report the engine counters
+([measurement](measurement.md#how-the-harness-reads-the-counters);
+`TestImportIndependence`, `TestCoreDoesNotImportMeasurement`).
+
+**Current contract — the lean read path** (owner decision, 2026-11-21,
+"Internal hook package"; see the
+[decision log](design-principles.md#owner-decisions)). The non-test files of
+`cursor` may also import `internal/leanread`, and no other internal package
+(`TestImportIndependence`). `cursor/position` does not import it.
+`internal/leanread` imports only the standard library
+(`TestImportsOnlyStandardLibrary` in `internal/leanread`), so a program that
+uses the cursor still builds nothing else of bytescan. The file `lean.go`
+registers `leanread.Hook` in `init`. The hook gives the scanner an unexported
+view of a `*Reader` whose method `Peek` decodes the next runes from the
+buffer in one call, under one lock, and does not move the logical cursor. No
+exported name of `cursor` is added for it. A type that embeds a `*Reader` does
+not get the lean read path (`TestLeanOf`). `Peek` returns the same runes and
+sizes as `ReadLocatedRune` at the same positions, reports the same errors,
+and leaves the buffer, the fills and the compactions as they are with one
+`ReadLocatedRune` per rune (`TestLeanPeekMatchesReadLocatedRune`,
+`TestLeanPeekDoesNotMove`). The scanner does not peek again the symbols it
+keeps past a token, so it can compact the buffer less often than it would
+with one `ReadLocatedRune` per rune, and it reads from the source as often
+(`TestLeanReadPathCounters` in the build with the tag `bench`). The view also
+reports, without the lock, an epoch: the number of calls of `ResetStart` and
+of marks made by `Checkpoint` and `Remark`. A reset can change the bytes at an
+offset, and a new mark can lower the retention headroom, so the scanner uses
+the symbols it keeps past a token only when the epoch moved by the mark of the
+next token alone (`TestCarryResetStartBetweenTokens`,
+`TestCarryOlderCheckpointBetweenTokens`).
 
 ## Positions
 

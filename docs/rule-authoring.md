@@ -40,6 +40,18 @@ constructor comment gives its regular expression or grammar and its behaviour
 at end of input, and it has its own tests. A consumer rule composed from core
 rules follows the standard in the same way.
 
+**Repetition.** Build the repeated part of `core.ZeroOrMore` or
+`core.OneOrMore` from `rules/core`, not by hand. A hand-written rule, or a core
+rule wrapped in a function of your own, is an opaque rule: `rules/core` did
+not build it, and it composes as an opaque part
+(`TestWrappedCoreRuleIsOpaque`). An opaque rule inside a repetition can cost
+time that grows with the square of the token length. This happens when the
+rule can end at many positions, such as a hand-written run of letters. The
+combinators cannot merge the repeated runs of an opaque rule. The *Cost* entry
+of [Composition and ambiguity](specs/composition.md#composition-and-ambiguity)
+states this cost, and `TestOpaqueZeroOrMoreIsNotMerged`
+(`rules/core/cost_internal_test.go`) checks it.
+
 ## Terms
 
 - **Rule value.** A value of type `bytescan.Rule`, the function
@@ -600,8 +612,8 @@ text:
   byte after it. A rule for binary data does not read them and is not wrapped
   in `core.AtLineStart`. `IsBOF` and `IsEOF` keep their meaning.
 - **A length stored in the data is read by a driver.** A rule that counts out
-  a stored length holds the whole field as one open token, about 10 bytes of
-  live heap per input byte, and a corrupt length makes it read on. Match the
+  a stored length holds the whole field as one open token, with live heap
+  in proportion to its bytes, and a corrupt length makes it read on. Match the
   fixed part of a header with a rule, and let a driver read the counted field
   with `bytesource.Read` or `bytesource.Fields`; `Fields` can also cut it
   into pieces of a bounded size. Bound every run with `core.RuneRunMax`, so that input

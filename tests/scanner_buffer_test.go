@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"io"
 	"runtime"
+	"slices"
 	"strings"
 	"testing"
 
@@ -464,4 +465,213 @@ func TestScannerBacktrackingAndBufferState(t *testing.T) {
 	// 4. End of file.
 	_, err = lx.Next()
 	assert.Equal(t, io.EOF, err)
+}
+
+// longTokenRunes is the length, in runes, of the long tokens below: more than
+// 1 Mi runes, so the stack of the token grows many times past its initial
+// capacity.
+const longTokenRunes = 1<<20 + 7
+
+// longTokenText returns n runes that cycle through runes of one to four bytes
+// and a newline, so that the symbols of a long token differ in rune, in size
+// and in flags (FlagEOL, FlagBOL).
+func longTokenText(n int) string {
+	cycle := []rune{'a', 'é', '€', '𝄞', '\n', 'b'}
+	var b strings.Builder
+	for i := 0; i < n; i++ {
+		b.WriteRune(cycle[i%len(cycle)])
+	}
+	return b.String()
+}
+
+// longTokenLine renders a token without its text, which can be long: its type,
+// its rune count, its line and column, and its byte span.
+func longTokenLine(tok *bytescan.Token) string {
+	s := tok.Span()
+	return fmt.Sprintf("%s +%d @%d:%d [%d,%d)", tok.Type(), s.Runes(), tok.Line(), tok.Column(), s.Start().ByteOffset(), s.End().ByteOffset())
+}
+
+// halfBackProbe counts what the pushback chains of newHalfBackRule are shown.
+type halfBackProbe struct {
+	shown      int // symbols shown by a pushback
+	mismatches int // shown symbols that differ from the symbol read there
+}
+
+// newHalfBackRule returns an engine probe for one token of runes other than
+// ';'. It continues over every such rune and keeps the symbols it reads. At
+// the terminator, ';' or the EOF symbol, it pushes back over the terminator
+// and then over the second half of the token, and accepts the first half (at
+// least one rune). Each symbol a pushback shows is compared with the symbol
+// read at that place of the stack. It keeps the symbols of the token on
+// purpose, which docs/rule-authoring.md asks a rule not to do.
+func newHalfBackRule(p *halfBackProbe) bytescan.Rule {
+	return func(s bytescan.Symbol) (bytescan.Rule, bytescan.State) {
+		var seen []bytescan.Symbol
+		var step bytescan.Rule
+		step = func(s bytescan.Symbol) (bytescan.Rule, bytescan.State) {
+			if s.IsEOF() || s.Rune() == ';' {
+				if len(seen) == 0 {
+					return nil, bytescan.StateReject
+				}
+				keep := max(1, len(seen)/2)
+				return halfBackAt(p, seen, s, len(seen), keep), bytescan.StatePushBack
+			}
+			seen = append(seen, s)
+			return step, bytescan.StateContinue
+		}
+		return step(s)
+	}
+}
+
+// halfBackAt returns the pushback-chain callback that is shown the symbol at
+// index i of the token: seen[i], or term when i is len(seen). At index keep
+// it accepts, which matches seen[:keep]; above it, it pushes back once more.
+func halfBackAt(p *halfBackProbe, seen []bytescan.Symbol, term bytescan.Symbol, i, keep int) bytescan.Rule {
+	return func(s bytescan.Symbol) (bytescan.Rule, bytescan.State) {
+		want := term
+		if i < len(seen) {
+			want = seen[i]
+		}
+		p.shown++
+		if s != want {
+			p.mismatches++
+		}
+		if i == keep {
+			return nil, bytescan.StateAccept
+		}
+		return halfBackAt(p, seen, term, i-1, keep), bytescan.StatePushBack
+	}
+}
+
+// wantHalfBack returns the texts of the tokens that newHalfBackRule makes of
+// a run of runes, and the number of symbols its pushback chains are shown: each
+// token is the first half of what is left, and its chain is shown the
+// terminator and the second half.
+func wantHalfBack(run []rune) (texts []string, shown int) {
+	for len(run) > 0 {
+		keep := max(1, len(run)/2)
+		shown += 1 + len(run) - keep
+		texts = append(texts, string(run[:keep]))
+		run = run[keep:]
+	}
+	return texts, shown
+}
+
+// scanLong returns the tokens of src until io.EOF, rendered by longTokenLine,
+// and their texts.
+func scanLong(t *testing.T, src bytescan.Source) (lines, texts []string) {
+	t.Helper()
+	for {
+		tok, err := src.Next()
+		if err == io.EOF {
+			return lines, texts
+		}
+		require.NoError(t, err)
+		lines = append(lines, longTokenLine(tok))
+		texts = append(texts, tok.Text())
+	}
+}
+
+// longTokenWant renders the expected tokens of input for longTokenLine: types
+// and texts in order, which must cover input.
+func longTokenWant(t *testing.T, input string, types, texts []string) []string {
+	t.Helper()
+	require.Len(t, types, len(texts))
+	var lines []string
+	runeOff, byteOff, line, col := 0, 0, 1, 0
+	for i, text := range texts {
+		require.True(t, strings.HasPrefix(input[byteOff:], text), "token %d does not follow the previous one", i)
+		n := len([]rune(text))
+		lines = append(lines, fmt.Sprintf("%s +%d @%d:%d [%d,%d)", types[i], n, line, col, byteOff, byteOff+len(text)))
+		for _, r := range text {
+			if r == '\n' {
+				line, col = line+1, 0
+			} else {
+				col++
+			}
+		}
+		runeOff += n
+		byteOff += len(text)
+	}
+	require.Equal(t, len(input), byteOff, "the tokens do not cover the input")
+	return lines
+}
+
+// TestLongTokenPushBackAcrossTheWholeToken covers a pushback chain over a
+// long token: newHalfBackRule pushes back over half of a run of more than
+// 1 Mi runes, and is shown every symbol it read there, unchanged, top first.
+// One run ends at ';' and one at the end of input.
+func TestLongTokenPushBackAcrossTheWholeToken(t *testing.T) {
+	run := longTokenText(longTokenRunes)
+	input := run + ";" + run
+
+	var p halfBackProbe
+	lx := bytescan.New(strings.NewReader(input))
+	lx.MustAddRule("HALF", newHalfBackRule(&p))
+	lx.MustAddRule("SEMI", newLiteralRule(";"))
+	lines, texts := scanLong(t, lx)
+
+	half, shown := wantHalfBack([]rune(run))
+	var wantTypes, wantTexts []string
+	for i := range half {
+		wantTypes, wantTexts = append(wantTypes, "HALF"), append(wantTexts, half[i])
+	}
+	wantTypes, wantTexts = append(wantTypes, "SEMI"), append(wantTexts, ";")
+	for i := range half {
+		wantTypes, wantTexts = append(wantTypes, "HALF"), append(wantTexts, half[i])
+	}
+
+	assert.Equal(t, longTokenWant(t, input, wantTypes, wantTexts), lines)
+	assert.True(t, slices.Equal(wantTexts, texts), "token texts")
+	assert.Equal(t, 2*shown, p.shown, "symbols shown by a pushback")
+	assert.Zero(t, p.mismatches, "shown symbols that differ from the symbols read")
+}
+
+// newGiveUpRule returns an engine probe that continues over every rune but
+// '?' and rejects at '?' and at the end of input. When the token starts with
+// "xyz", it accepts after the 'z' first. So it reads to the end of a long
+// token and gives up there, with or without an accept recorded earlier.
+func newGiveUpRule() bytescan.Rule {
+	var loop bytescan.Rule
+	loop = func(s bytescan.Symbol) (bytescan.Rule, bytescan.State) {
+		if s.IsEOF() || s.Rune() == '?' {
+			return nil, bytescan.StateReject
+		}
+		return loop, bytescan.StateContinue
+	}
+	prefix := []rune("xyz")
+	var at func(i int) bytescan.Rule
+	at = func(i int) bytescan.Rule {
+		return func(s bytescan.Symbol) (bytescan.Rule, bytescan.State) {
+			if s.Rune() != prefix[i] {
+				return loop(s)
+			}
+			if i == len(prefix)-1 {
+				return loop, bytescan.StateAccept
+			}
+			return at(i + 1), bytescan.StateContinue
+		}
+	}
+	return at(0)
+}
+
+// TestLongTokenRuleGivesUpAtTheEnd covers rules that read to the end of a long
+// token and give up there. GIVEUP accepts "xyz" and then reads the run of more
+// than 1 Mi runes that follows: the token is "xyz", decided at the end of the
+// run. On the run itself GIVEUP has no accept and gives up at its end, and RUN
+// matches the run. One run ends at '?' and one at the end of input.
+func TestLongTokenRuleGivesUpAtTheEnd(t *testing.T) {
+	run := longTokenText(longTokenRunes)
+	input := "xyz" + run + "?" + "xyz" + run
+
+	lx := bytescan.New(strings.NewReader(input))
+	lx.MustAddRule("GIVEUP", newGiveUpRule())
+	lx.MustAddRule("RUN", newRunePlusRule(func(r rune) bool { return !strings.ContainsRune("xyz?", r) }))
+	lx.MustAddRule("Q", newLiteralRule("?"))
+	lines, texts := scanLong(t, lx)
+
+	wantTypes := []string{"GIVEUP", "RUN", "Q", "GIVEUP", "RUN"}
+	wantTexts := []string{"xyz", run, "?", "xyz", run}
+	assert.Equal(t, longTokenWant(t, input, wantTypes, wantTexts), lines)
+	assert.True(t, slices.Equal(wantTexts, texts), "token texts")
 }

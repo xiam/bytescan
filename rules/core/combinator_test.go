@@ -425,3 +425,165 @@ func TestCombinatorReuse(t *testing.T) {
 		require.Equal(t, bytescan.StateContinue, state)
 	})
 }
+
+// verdictTrace calls r with each symbol of input in turn, each time on the
+// Rule value that the call before returned, and returns the states. It stops
+// when a call returns no Rule value.
+func verdictTrace(r bytescan.Rule, input string) []bytescan.State {
+	var states []bytescan.State
+	for _, sym := range input {
+		if r == nil {
+			break
+		}
+		var state bytescan.State
+		r, state = r(bytescan.NewSymbol(sym, bytescan.FlagNone))
+		states = append(states, state)
+	}
+	return states
+}
+
+// advanceRule returns the Rule value after the symbols of input, which must
+// all continue the token.
+func advanceRule(t *testing.T, r bytescan.Rule, input string) bytescan.Rule {
+	t.Helper()
+	for _, sym := range input {
+		require.NotNil(t, r, "the token ended before %q of %q", sym, input)
+		r, _ = r(bytescan.NewSymbol(sym, bytescan.FlagNone))
+	}
+	require.NotNil(t, r, "the token ended after %q", input)
+	return r
+}
+
+// literals returns the Choice of a Literal of each word.
+func literals(words ...string) bytescan.Rule {
+	rs := make([]bytescan.Rule, len(words))
+	for i, w := range words {
+		rs[i] = core.Literal(w)
+	}
+	return core.Choice(rs...)
+}
+
+// TestCombinatorRetainedAncestor: a Rule value kept from the middle of a token
+// gives the same verdicts after its descendants have advanced. Two branches
+// leave one ancestor and advance two or more symbols each; then the ancestor
+// and both branches are called again, from several goroutines at once, and
+// every verdict equals that of a fresh rule fed the whole input. The rules
+// keep one, two, three, four and more than four threads, with and without a
+// symbol log, so every way that a state stores its threads is covered.
+func TestCombinatorRetainedAncestor(t *testing.T) {
+	number := core.Sequence(
+		core.Optional(core.Rune(core.RuneSet("+-"))),
+		core.RuneRun(core.ASCIIDigit),
+		core.Optional(core.Sequence(core.Literal("."), core.RuneRun(core.ASCIIDigit))),
+		core.NotFollowedBy(core.Optional(core.Literal("e")), core.Rune(core.ASCIILetter)),
+	)
+	words := core.Choice(
+		core.Literal("abcd"), core.Literal("abce"), core.Literal("abcf"),
+		core.Literal("abxy"), core.Literal("abxz"), core.Sequence(core.Literal("ab"), core.RuneRun(core.ASCIILetter)),
+		core.Sequence(core.RuneRun(core.ASCIILetter), core.Literal("q")),
+	)
+	cases := []struct {
+		name             string
+		rule             bytescan.Rule
+		prefix, a, b, at string // at: what the ancestor reads again
+	}{
+		{"one thread", core.RuneRun(core.ASCIILetter), "ab", "cde ", "xyz1", "q "},
+		{"two threads", literals("abcdef", "abcdeg"), "a", "bcdef", "bcdeg", "bx"},
+		{"three threads", literals("abcdef", "abcdeg", "abcdeh"), "ab", "cdeh", "cdex", "cdeg"},
+		{"four threads", literals("abcdef", "abcdeg", "abcdeh", "abcdei"), "a", "bcdei", "bcdef", "bcx"},
+		{"many threads", words, "ab", "cdq", "xyzq ", "cfq"},
+		{"symbol log", number, "1", ".5x", "23.e", "2.25 "},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			fresh := func(input, suffix string) []bytescan.State {
+				all := verdictTrace(tc.rule, input+suffix)
+				require.GreaterOrEqual(t, len(all), len(input), "fresh run of %q", input+suffix)
+				return all[len(input):]
+			}
+			ancestor := advanceRule(t, tc.rule, tc.prefix)
+			branchA := advanceRule(t, ancestor, tc.a[:2])
+			branchB := advanceRule(t, ancestor, tc.b[:2])
+			// Each branch advances once more, so the ancestor has descendants
+			// two and three steps away.
+			_ = advanceRule(t, branchA, tc.a[2:3])
+			_ = advanceRule(t, branchB, tc.b[2:3])
+
+			runs := []struct {
+				r            bytescan.Rule
+				input, after string
+			}{
+				{ancestor, tc.prefix, tc.at},
+				{ancestor, tc.prefix, tc.a},
+				{branchA, tc.prefix + tc.a[:2], tc.a[2:]},
+				{branchB, tc.prefix + tc.b[:2], tc.b[2:]},
+			}
+			var wg sync.WaitGroup
+			got := make([][]bytescan.State, 4*len(runs))
+			for i := range got {
+				wg.Add(1)
+				go func(i int) {
+					defer wg.Done()
+					run := runs[i%len(runs)]
+					got[i] = verdictTrace(run.r, run.after)
+				}(i)
+			}
+			wg.Wait()
+			for i, states := range got {
+				run := runs[i%len(runs)]
+				assert.Equal(t, fresh(run.input, run.after), states, "goroutine %d: %q then %q", i, run.input, run.after)
+			}
+		})
+	}
+}
+
+// TestCombinatorSharedRule: one registered composed rule, shared by two
+// scanners that lex different inputs at the same time, gives each scanner the
+// token stream that it gives in a scanner alone.
+func TestCombinatorSharedRule(t *testing.T) {
+	const (
+		lexTypeNumber = bytescan.TokenType("NUMBER")
+		lexTypeWord   = bytescan.TokenType("WORD")
+	)
+	number := core.Sequence(
+		core.Optional(core.Rune(core.RuneSet("+-"))),
+		core.RuneRun(core.ASCIIDigit),
+		core.Optional(core.Sequence(core.Literal("."), core.RuneRun(core.ASCIIDigit))),
+		core.NotFollowedBy(core.Optional(core.Literal("e")), core.Rune(core.ASCIILetter)),
+	)
+	word := core.Choice(core.Literal("if"), core.Literal("ifelse"), core.RuneRun(core.ASCIILetter))
+	space := core.RuneRun(core.ASCIISpace)
+	setup := func(lx *bytescan.Scanner) {
+		lx.MustAddRule(lexTypeNumber, number)
+		lx.MustAddRule(lexTypeWord, word)
+		lx.MustAddRule(lexTypeR, space)
+	}
+	inputs := []string{
+		strings.Repeat("12 -3.5 +7e 4.25 1.x 9a ", 40),
+		strings.Repeat("ifelse if abc 0.5 ifx 77 ", 40),
+	}
+	want := make([][]string, len(inputs))
+	for i, input := range inputs {
+		var err error
+		want[i], err = collectStream(input, setup)
+		require.NoError(t, err)
+	}
+
+	for round := 0; round < 4; round++ {
+		var wg sync.WaitGroup
+		got := make([][]string, len(inputs))
+		errs := make([]error, len(inputs))
+		for i, input := range inputs {
+			wg.Add(1)
+			go func(i int, input string) {
+				defer wg.Done()
+				got[i], errs[i] = collectStream(input, setup)
+			}(i, input)
+		}
+		wg.Wait()
+		for i := range inputs {
+			require.NoError(t, errs[i], "round %d, scanner %d", round, i)
+			assert.Equal(t, want[i], got[i], "round %d, scanner %d", round, i)
+		}
+	}
+}

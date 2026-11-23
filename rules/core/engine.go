@@ -19,7 +19,33 @@ import (
 // snapshot, so the rule keeps its state only in the Rule values it returns
 // (principle 1 of docs/specs/design-principles.md and practice 4 of
 // docs/rule-authoring.md). The VM sees one rule with delayed acceptance and
-// at most one terminal pushback chain (see snapshot.verdict).
+// at most one terminal pushback chain (see verdictOf).
+//
+// What a step shares, and what it does not:
+//
+//   - A caller may call a Rule value again, call it concurrently, keep an
+//     ancestor value and call it after its descendants advanced, and share
+//     one registered rule between scanners (TestCombinatorReuse,
+//     TestCombinatorRetainedAncestor, TestCombinatorSharedRule). So no Rule
+//     value is ever treated as owned by one caller, and a step never writes
+//     to the storage of the value that it runs from.
+//   - The scratch of a step is the closure walks, the merge set and the
+//     threads that the step builds. For a program that needs no log, it lives
+//     on the stack of the call (snapshot.stepCore). Otherwise it lives in a
+//     stepper: each call takes its own stepper from stepperPool and holds it
+//     alone until it returns, so two calls never share scratch. The step
+//     copies its threads out of the scratch before it returns the stepper,
+//     cleared. A pooled stepper keeps the storage of its scratch for the next
+//     call that takes it; no snapshot and no Rule value refers to that
+//     storage.
+//   - Each Rule value that a step returns is a new value with its own copy
+//     of the snapshot and of its threads (snapshot.rule). Up to fewThreads
+//     threads live inside the allocation of the Rule value; more take one
+//     new slice of the exact size. Nothing in that storage is written after
+//     the value is built, so the returned values stay independent.
+//   - The symbol log is the one storage that Rule values of one token share.
+//     It only grows, under its lock, and a snapshot reads only its own
+//     prefix of it (symbolLog.extend).
 
 // A snapshot is the state of a composed rule after the first n symbols of a
 // token.
@@ -106,18 +132,158 @@ func newSnapshot(prog *program) snapshot {
 }
 
 // rule returns the Rule value that reads the next symbol at position snap.n
-// and returns the verdict of the composed rule. The Rule value holds a copy
-// of snap: a snapshot is small enough that Go captures it by value, so the
-// snapshot and its Rule value are one allocation, and a step whose verdict
-// returns no Rule value allocates neither.
+// and returns the verdict of the composed rule. The Rule value holds its own
+// copy of snap and of its threads, so it never shares storage with snap or
+// with another Rule value: a snapshot is small enough that Go captures it by
+// value, so the snapshot and its Rule value are one allocation. A state of up
+// to fewThreads threads also keeps its threads in that allocation; a larger
+// one adds one slice of the exact size. A step whose verdict returns no Rule
+// value allocates neither.
 func (snap snapshot) rule() bytescan.Rule {
+	return newRule(snap.withoutThreads(), snap.threads)
+}
+
+// newRule returns the Rule value of the snapshot head with the threads ts:
+// head.rule() for head with ts as its threads. It only reads ts, which may be
+// scratch of the caller.
+func newRule(head snapshot, ts []thread) bytescan.Rule {
+	switch k := len(ts); {
+	case k == 1:
+		t0 := ts[0]
+		return func(s bytescan.Symbol) (bytescan.Rule, bytescan.State) {
+			own := [1]thread{t0}
+			return head.step(own[:], s)
+		}
+	case k == 2:
+		pair := [2]thread{ts[0], ts[1]}
+		return func(s bytescan.Symbol) (bytescan.Rule, bytescan.State) {
+			own := pair
+			return head.step(own[:], s)
+		}
+	case k <= fewThreads:
+		// Go captures a variable by value only up to 128 bytes, so the
+		// threads are two arrays of two.
+		lo, hi := pairAt(ts, 0), pairAt(ts, 2)
+		return func(s bytescan.Symbol) (bytescan.Rule, bytescan.State) {
+			own := [fewThreads]thread{lo[0], lo[1], hi[0], hi[1]}
+			return head.step(own[:k], s)
+		}
+	}
+	own := append([]thread(nil), ts...) // exactly len(ts) threads
 	return func(s bytescan.Symbol) (bytescan.Rule, bytescan.State) {
-		return snap.next(s).verdict()
+		return head.step(own, s)
 	}
 }
 
-// next returns the snapshot after the symbol s at position snap.n.
+// pairAt returns the threads i and i+1 of ts, a zero thread for each that ts
+// does not have.
+func pairAt(ts []thread, i int) [2]thread {
+	var pair [2]thread
+	copy(pair[:], ts[i:])
+	return pair
+}
+
+// fewThreads is the most threads that a Rule value keeps inside its own
+// allocation.
+const fewThreads = 4
+
+// withoutThreads returns snap without its threads.
+func (snap snapshot) withoutThreads() snapshot {
+	return snapshot{prog: snap.prog, log: snap.log, n: snap.n, pending: snap.pending, best: snap.best, recorded: snap.recorded}
+}
+
+// step reads the symbol s at position snap.n with threads, the threads of
+// snap, and returns the verdict of the composed rule. threads may be storage
+// of the caller's stack: step only reads them.
+func (snap snapshot) step(threads []thread, s bytescan.Symbol) (bytescan.Rule, bytescan.State) {
+	if !snap.prog.needsLog {
+		return snap.stepCore(threads, s)
+	}
+	after, st := snap.advance(threads, s)
+	// verdictOf copies the threads out of the scratch of st.
+	next, state := verdictOf(after.withoutThreads(), after.threads)
+	st.release()
+	return next, state
+}
+
+// stepCore is step for a program that needs no log (program.needsLog): every
+// leaf is a core matcher, no instruction is a lookahead, and nothing resumes
+// the program at an earlier position, so the step needs no stepper. It builds
+// the threads in scratch on the stack of the call, and the Rule value that it
+// returns copies them.
+func (snap snapshot) stepCore(threads []thread, s bytescan.Symbol) (bytescan.Rule, bytescan.State) {
+	var scratch [2 * fewThreads]thread
+	out := scratch[:0]
+	c := coreStep{insts: snap.prog.insts, best: snap.best}
+	if !s.IsEOF() { // a matcher sees no EOF symbol, so every thread ends
+		for _, t := range threads {
+			out = c.read(out, t, s.Rune(), snap.n+1)
+		}
+	}
+	head := snapshot{prog: snap.prog, n: snap.n + 1, best: c.best, recorded: snap.recorded}
+	if head.best == head.n {
+		head.recorded = head.n // verdictOf accepts everything read
+	}
+	return verdictOf(head, merge(out))
+}
+
+// coreStep is the state of stepCore besides its threads: the program, and
+// the longest end of the program found so far.
+type coreStep struct {
+	insts []inst
+	best  int
+}
+
+// read reads the rune r with the core leaf of t, and appends to out the
+// threads that wait at position at, after r.
+func (c *coreStep) read(out []thread, t thread, r rune, at int) []thread {
+	in := &c.insts[t.pc]
+	next, match, more := in.leaf.m.step(t.state, r)
+	if more {
+		out = append(out, thread{pc: t.pc, state: next})
+	}
+	if match {
+		var seen keySet[int]
+		out = c.visit(out, &seen, in.next, at)
+	}
+	return out
+}
+
+// visit follows the program from pc at position at and appends to out the
+// threads of the leaves that it reaches, as walk.visit does for a program
+// without opaque leaves and lookaheads.
+func (c *coreStep) visit(out []thread, seen *keySet[int], pc, at int) []thread {
+	if !seen.add(pc) {
+		return out
+	}
+	in := &c.insts[pc]
+	switch in.op {
+	case opLeaf:
+		out = append(out, thread{pc: pc})
+	case opFork:
+		for _, target := range in.targets {
+			out = c.visit(out, seen, target, at)
+		}
+	case opMatch:
+		c.best = max(c.best, at)
+	}
+	return out
+}
+
+// next returns the snapshot after the symbol s at position snap.n. Its
+// threads are a new slice.
 func (snap snapshot) next(s bytescan.Symbol) snapshot {
+	after, st := snap.advance(snap.threads, s)
+	after.threads = append([]thread(nil), after.threads...)
+	st.release()
+	return after
+}
+
+// advance returns the snapshot after the symbol s at position snap.n, read
+// with threads, and the stepper that computed it. The threads of the result
+// may live in the scratch of that stepper, so they are valid only until the
+// caller releases it, and the caller copies them before.
+func (snap snapshot) advance(threads []thread, s bytescan.Symbol) (snapshot, *stepper) {
 	// A program that needs no log reads only the symbol at snap.n.
 	var log *symbolLog
 	var syms []bytescan.Symbol
@@ -125,43 +291,65 @@ func (snap snapshot) next(s bytescan.Symbol) snapshot {
 		log, syms = snap.log.extend(snap.n, s)
 	}
 	// The stepper is scratch for this call only: it comes from a pool and
-	// goes back cleared, so it holds no reference once next returns.
+	// goes back cleared (release), so it holds no reference once the call
+	// returns.
 	st := stepperPool.Get().(*stepper)
 	*st = stepper{
 		prog:    snap.prog,
 		syms:    syms,
 		cur:     s,
 		n:       snap.n + 1,
-		pending: append([]*lookahead(nil), snap.pending...),
 		best:    snap.best,
+		scratch: st.scratch,
 	}
-	threads := st.settle(st.feed(snap.threads, snap.n))
+	if len(snap.pending) > 0 {
+		// settle changes the pending lookaheads, and snap keeps its own.
+		st.pending = append([]*lookahead(nil), snap.pending...)
+	}
+	out := st.feed(st.scratch[:0], threads, snap.n)
+	st.scratch = out[:0]
+	out = st.settle(out)
 	recorded := snap.recorded
 	if st.best == st.n {
-		recorded = st.n // verdict accepts everything read
+		recorded = st.n // verdictOf accepts everything read
 	}
-	after := snapshot{
+	return snapshot{
 		prog:     snap.prog,
 		log:      log,
 		n:        st.n,
-		threads:  threads,
+		threads:  out,
 		pending:  st.pending,
 		best:     st.best,
 		recorded: recorded,
-	}
-	*st = stepper{}
-	stepperPool.Put(st)
-	return after
+	}, st
 }
 
-// stepperPool holds the steppers of next. A stepper escapes to the heap
+// release clears st and puts it back in the pool. It keeps the storage of
+// st.scratch, cleared, for the next call that takes st, unless it has grown
+// beyond maxScratch threads.
+func (st *stepper) release() {
+	scratch := st.scratch[:cap(st.scratch)]
+	clear(scratch)
+	if cap(scratch) > maxScratch {
+		scratch = nil
+	}
+	*st = stepper{scratch: scratch[:0]}
+	stepperPool.Put(st)
+}
+
+// maxScratch is the largest scratch, in threads, that a pooled stepper keeps.
+const maxScratch = 256
+
+// stepperPool holds the steppers of advance. A stepper escapes to the heap
 // (the recursion of settle and resume defeats escape analysis), so without
-// the pool every step would allocate one. Each call of next takes its own
-// stepper, so Rule values stay safe for concurrent use.
+// the pool every step would allocate one. Each call of advance takes its own
+// stepper and holds it until it releases it, so no two calls share one, and
+// Rule values stay safe for concurrent use.
 var stepperPool = sync.Pool{New: func() any { return new(stepper) }}
 
-// verdict returns what the composed rule tells the VM after the symbols of
-// snap. It uses delayed acceptance with terminal fallback ("Lookahead combined
+// verdictOf returns what the composed rule tells the VM after the symbols of
+// snap, whose threads are ts. It only reads ts, which may be scratch of the
+// caller. It uses delayed acceptance with terminal fallback ("Lookahead combined
 // with a longer match" in docs/specs/rule-vm-contract.md):
 //
 //   - When the longest end is everything read, the rule accepts, and it
@@ -171,16 +359,16 @@ var stepperPool = sync.Pool{New: func() any { return new(stepper) }}
 //   - When every thread is dead, the rule ends with one pushback chain to the
 //     longest end if the VM has not recorded it yet, or it rejects and the
 //     recorded match stays.
-func (snap snapshot) verdict() (bytescan.Rule, bytescan.State) {
-	alive := len(snap.threads) > 0
+func verdictOf(snap snapshot, ts []thread) (bytescan.Rule, bytescan.State) {
+	alive := len(ts) > 0
 	switch {
 	case snap.best == snap.n:
 		if alive {
-			return snap.rule(), bytescan.StateAccept
+			return newRule(snap, ts), bytescan.StateAccept
 		}
 		return nil, bytescan.StateAccept
 	case alive:
-		return snap.rule(), bytescan.StateContinue
+		return newRule(snap, ts), bytescan.StateContinue
 	case snap.best > snap.recorded:
 		// No accept is recorded at or after best: the last accept recorded
 		// everything read at that time, which was less than best.
@@ -243,6 +431,11 @@ type stepper struct {
 
 	// best is the longest end of the whole program found so far.
 	best int
+
+	// scratch is storage for the threads that the step builds at st.n. The
+	// step copies them out before it releases the stepper, so no snapshot
+	// and no Rule value refers to it.
+	scratch []thread
 }
 
 // resumeKey identifies a resumption of the program: where it continues, from
@@ -253,9 +446,10 @@ type resumeKey struct {
 }
 
 // feed reads the symbol at position p with every thread in ts, which wait at
-// p, and returns the threads that wait at p+1.
-func (st *stepper) feed(ts []thread, p int) []thread {
-	var out []thread
+// p, appends to out the threads that wait at p+1, and returns them merged.
+// out is empty: the scratch of st for the step itself, nil for a resumption,
+// so that the threads of a resumption never share the scratch.
+func (st *stepper) feed(out, ts []thread, p int) []thread {
 	for _, t := range ts {
 		if !st.dropped(t.look) {
 			out = st.read(out, t, p)
@@ -377,7 +571,7 @@ func (st *stepper) resume(pc, at int, look *lookahead, to int) []thread {
 
 	ts := st.closure(nil, pc, at, look)
 	for p := at; p < to; p++ {
-		ts = st.feed(ts, p)
+		ts = st.feed(nil, ts, p)
 	}
 	return ts
 }
@@ -547,14 +741,29 @@ func (st *stepper) withoutDropped(ts []thread) []thread {
 
 // merge returns ts without the threads whose key an earlier thread has. It
 // filters ts in place: ts is always a slice that the current step built (the
-// output of feed or of settle), never the threads of a snapshot, so the
-// snapshots stay unchanged.
+// output of feed or of settle, or the scratch of the stepper), never the
+// threads of a snapshot or of a Rule value, so they stay unchanged.
 func merge(ts []thread) []thread {
 	if len(ts) < 2 {
 		return ts
 	}
-	var seen keySet[threadKey]
 	kept := ts[:0]
+	if len(ts) <= keySetScanLimit {
+		// A few threads: compare each one with the threads kept before it,
+		// without the zeroed array of a keySet.
+	next:
+		for _, t := range ts {
+			k := t.key()
+			for _, have := range kept {
+				if have.key() == k {
+					continue next
+				}
+			}
+			kept = append(kept, t)
+		}
+		return kept
+	}
+	var seen keySet[threadKey]
 	for _, t := range ts {
 		if seen.add(t.key()) {
 			kept = append(kept, t)

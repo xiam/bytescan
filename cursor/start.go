@@ -61,6 +61,7 @@ func (t *Reader) ResetStart(src io.Reader, s Start) error {
 
 	t.mu.Lock()
 	defer t.mu.Unlock()
+	t.ctr.lock()
 
 	for _, c := range t.checkpoints {
 		c.mu.Lock()
@@ -84,6 +85,7 @@ func (t *Reader) ResetStart(src io.Reader, s Start) error {
 	t.utf8Carry = [utf8.UTFMax]byte{}
 	t.utf8CarryLen = 0
 	t.start = s
+	t.epoch.Add(1)
 
 	return nil
 }
@@ -93,6 +95,7 @@ func (t *Reader) ResetStart(src io.Reader, s Start) error {
 func (t *Reader) Start() Start {
 	t.mu.Lock()
 	defer t.mu.Unlock()
+	t.ctr.lock()
 
 	return t.start
 }

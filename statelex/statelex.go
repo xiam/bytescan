@@ -1,6 +1,7 @@
 package statelex
 
 import (
+	"bytes"
 	"errors"
 	"fmt"
 	"strings"
@@ -208,23 +209,85 @@ func (lx *Lexer) SetText(text []byte) (Change, error) {
 	if lx.err != nil {
 		return Change{}, lx.err
 	}
-	old := lx.text.read(0, lx.text.len())
-	pre := 0
-	for pre < len(old) && pre < len(text) && old[pre] == text[pre] {
-		pre++
-	}
-	suf := 0
-	for suf < len(old)-pre && suf < len(text)-pre && old[len(old)-1-suf] == text[len(text)-1-suf] {
-		suf++
-	}
-	start, end := pre, len(old)-suf
-	if k, _, inside := charAt(old, start); inside {
+	oldLen := lx.text.len()
+	pre := lx.commonStart(text)
+	suf := lx.commonEnd(text, min(oldLen, len(text))-pre)
+	start, end := pre, oldLen-suf
+	if k, _, inside := lx.charAround(start); inside {
 		start = k
 	}
-	if k, size, inside := charAt(old, end); inside {
+	if k, size, inside := lx.charAround(end); inside {
 		end = k + size
 	}
-	return lx.apply(start, end, text[start:len(text)-(len(old)-end)])
+	return lx.apply(start, end, text[start:len(text)-(oldLen-end)])
+}
+
+// commonStart returns the length of the common start of the held text and
+// text. It compares the chunks of the rope with text in place, one chunk at a
+// time, and stops at the first chunk that differs.
+func (lx *Lexer) commonStart(text []byte) int {
+	it := lx.text.iter(0)
+	pos := 0
+	for pos < len(text) {
+		c := it.next()
+		if c == nil {
+			break
+		}
+		c = c[:min(len(c), len(text)-pos)]
+		t := text[pos : pos+len(c)]
+		if !bytes.Equal(c, t) {
+			i := 0
+			for c[i] == t[i] {
+				i++
+			}
+			return pos + i
+		}
+		pos += len(c)
+	}
+	return pos
+}
+
+// commonEnd returns the length of the common end of the held text and text,
+// at most m. The last m bytes of both are compared from their start, one
+// chunk of the rope at a time, and the common end follows the last byte that
+// differs.
+func (lx *Lexer) commonEnd(text []byte, m int) int {
+	if m <= 0 {
+		return 0
+	}
+	it := lx.text.iter(lx.text.len() - m)
+	text = text[len(text)-m:]
+	last := -1 // the last byte that differs, in the last m bytes
+	pos := 0
+	for pos < m {
+		c := it.next()
+		if c == nil {
+			break
+		}
+		c = c[:min(len(c), m-pos)]
+		t := text[pos : pos+len(c)]
+		if !bytes.Equal(c, t) {
+			i := len(c) - 1
+			for c[i] == t[i] {
+				i--
+			}
+			last = pos + i
+		}
+		pos += len(c)
+	}
+	return m - 1 - last
+}
+
+// charAround is charAt for the held text: it reads only the bytes next to
+// off, as splitsChar does.
+func (lx *Lexer) charAround(off int) (start, size int, inside bool) {
+	lo := max(0, off-(utf8.UTFMax-1))
+	hi := min(lx.text.len(), off+utf8.UTFMax-1)
+	if lo >= off || off >= hi {
+		return 0, 0, false
+	}
+	k, size, inside := charAt(lx.text.read(lo, hi), off-lo)
+	return lo + k, size, inside
 }
 
 // splitsChar reports whether off falls inside a valid UTF-8 character of the

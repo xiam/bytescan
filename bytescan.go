@@ -32,9 +32,16 @@
 // A token is assembled speculatively and then committed. The scanner marks a
 // checkpoint at the start of a token, reads located runes until the rules
 // decide, and then steps the cursor back over the speculative overshoot so it
-// sits at the end of the winning match. Token positions come from that
-// committed range — the checkpoint's position and the cursor after the step
-// back — never from where speculation stopped.
+// sits at the end of the winning match. Over a *cursor.Reader the scanner
+// reads the runes of a token from the cursor's buffer in batches and leaves
+// the cursor at the start of the token; once the rules decide, it moves the
+// cursor over the winning match only, so there is no step back. It keeps the
+// symbols of the overshoot and shows them to the rules of the next token
+// before it reads the cursor again, when the cursor is still at the end of the
+// token and nothing reset the cursor or marked a checkpoint on it. Between two calls of Next the cursor sits at the end of the
+// committed token on both paths. Token positions come from that committed
+// range — the checkpoint's position and the cursor at the end of the match —
+// never from where speculation stopped.
 //
 // The scanner keeps a fixed pool of checkpoint slots — one per token the context
 // window retains, plus the in-flight token. When the cursor can re-arm a
@@ -48,10 +55,10 @@
 // # Memory and the hard bound
 //
 // A scanner holds memory in proportion to its longest open token. While a token
-// is assembled, the rule stack keeps every symbol read for it (8 bytes per
-// rune) and the cursor retains its input. For ASCII input that is about 10
-// bytes of live heap per input byte, measured on one open token of 4 MiB; the
-// peak while the stack grows is about 3 times that. A token stays open while
+// is assembled, the rule stack keeps every symbol read for it (one packed entry
+// per rune, half the size of a Symbol) and the cursor retains its input. So the
+// live heap grows linearly with the bytes of the open token, and the peak while
+// the stack grows is higher than the live heap. A token stays open while
 // any rule keeps reading, so one token that never settles holds the rest of
 // the input.
 //
@@ -75,6 +82,7 @@ import (
 	"sync"
 
 	"github.com/xiam/bytescan/cursor"
+	"github.com/xiam/bytescan/internal/leanread"
 )
 
 const (
@@ -201,11 +209,56 @@ type Scanner struct {
 	// previous token while a token is assembled.
 	maxTokenBytes int
 
+	// lean is the lean read path of the cursor (package internal/leanread),
+	// or nil when the cursor has none. It is set once at construction, as
+	// canRemark is. With it, readSymbol takes the runes of a token from
+	// leanWin, which one Peek fills, and the cursor stays at the start of the
+	// token until the rules decide it (see readSymbolLean).
+	lean leanread.Reader
+
+	// leanWin holds the runes of the last Peek, and leanN is their number.
+	// leanI is the next rune to read from it. leanAt is the position the
+	// last Peek started at. leanSkip is the number of bytes of the symbols
+	// read for the token so far: the next Peek starts there. leanPartial
+	// reports that a Peek of the token decoded an incomplete UTF-8 sequence
+	// (leanread.At.Partial), so leanAdvance moves the cursor one symbol at a
+	// time. nextToken sets them to zero at the start of each token.
+	leanWin     [leanBatch]leanread.Rune
+	leanN       int
+	leanI       int
+	leanAt      leanread.At
+	leanSkip    int
+	leanPartial bool
+
+	// carry holds symbols that the rules were shown past the end of the last
+	// committed token, and carryI is the next one to show. readSymbolLean
+	// shows carry[carryI:] first, then the rest of leanWin, and only then
+	// peeks again, so the next token does not decode those runes again and
+	// the commit does not step the cursor back over them. carryAt is the
+	// byte offset of the cursor at that commit, and carryEpoch is the epoch
+	// of the cursor then (leanread.Reader.Epoch). carryOK reports that a
+	// commit kept the carry and nothing dropped it since. nextToken uses the
+	// carry only when the cursor is at carryAt and nothing reset it or marked
+	// it since, except the mark of the token itself; otherwise it drops the
+	// carry and reads from the cursor (see takeCarry).
+	carry      []Symbol
+	carryI     int
+	carryAt    int
+	carryEpoch uint64
+	carryOK    bool
+
 	mu sync.Mutex
 
 	rules    []TokenType
 	rulesMap map[TokenType]Rule
 	rulesMu  sync.RWMutex
+
+	// ctr holds the engine counters in the build with the tag bench, and
+	// nothing in the normal build (counters_on.go, counters_off.go). It is not
+	// the last field, so its size of zero in the normal build adds no padding.
+	// It comes after the fields of the hot path, so the counters of the build
+	// with the tag do not move them.
+	ctr scanCounters
 
 	processor *rulesProcessor
 }
@@ -285,6 +338,9 @@ func newWithCursorConfig(c Cursor, cfg *config) *Scanner {
 	}
 	if s, ok := c.(startCursor); ok {
 		sc.starter = s
+	}
+	if l, ok := leanread.Of(c); ok {
+		sc.lean = l
 	}
 	sc.maxTokenBytes = cfg.maxTokenBytes
 	return sc
@@ -463,6 +519,11 @@ func (sc *Scanner) Release() {
 	}
 
 	sc.marksNext = 0
+
+	// A mode driver calls Release when it switches to another scanner. The
+	// symbols carried past the last token are dropped, and the next token
+	// of this scanner reads them from the cursor again.
+	sc.dropCarry()
 }
 
 func (sc *Scanner) getProcessor() (*rulesProcessor, error) {
@@ -490,6 +551,7 @@ func (sc *Scanner) getProcessor() (*rulesProcessor, error) {
 		return nil, ErrNoRules
 	}
 	sc.processor = newRulesProcessor(sc.rules, sc.rulesMap)
+	sc.processor.ctr = sc.ctr.rules()
 	return sc.processor, nil
 }
 
@@ -500,7 +562,13 @@ func (sc *Scanner) getProcessor() (*rulesProcessor, error) {
 // from the located rune and the cursor position, so a symbol read again during
 // replay gets the same flags. At offset 0 they also come from the start of the
 // cursor's source (see startCursor).
+//
+// A cursor with the lean read path is read by readSymbolLean instead.
 func (sc *Scanner) readSymbol() (sym Symbol, isEOF bool, err error) {
+	if sc.lean != nil {
+		return sc.readSymbolLean()
+	}
+
 	lr, err := sc.cursor.ReadLocatedRune()
 	if err != nil {
 		if !errors.Is(err, io.EOF) {
@@ -524,6 +592,194 @@ func (sc *Scanner) readSymbol() (sym Symbol, isEOF bool, err error) {
 	}
 
 	return Symbol{r: lr.Rune(), flags: uint8(flags), size: uint8(lr.Size())}, false, nil
+}
+
+// leanBatch is the most runes one Peek of the lean read path decodes. A Peek
+// decodes only the runes that the cursor's buffer already holds, so a larger
+// batch never reads more input; it can only decode runes after the end of a
+// short token that the token does not use.
+const leanBatch = 16
+
+// readSymbolLean reads the next symbol of the token through the lean read path
+// (package internal/leanread). It returns the same symbols, with the same
+// flags, as readSymbol returns through ReadLocatedRune, but it does not move the
+// cursor: the cursor stays at the start of the token, and nextToken moves it
+// over the symbols read once the rules decide the token.
+//
+// The flags come from the position of the rune instead of from a full Pos. The
+// first rune of the token gets BOF and BOL from the position at the cursor, as
+// Peek reports it. A later rune starts a line exactly when the rune before it
+// is a newline, and it is never at the start of the stream.
+func (sc *Scanner) readSymbolLean() (sym Symbol, isEOF bool, err error) {
+	if sc.carryI < len(sc.carry) {
+		// A symbol that the rules were shown past the end of the last token.
+		// Its flags came from the same position, so they are the flags a
+		// read from the cursor gives.
+		s := sc.carry[sc.carryI]
+		sc.carryI++
+		sc.leanSkip += s.Size()
+		return s, false, nil
+	}
+
+	if sc.leanI == sc.leanN {
+		n, at, err := sc.lean.Peek(sc.leanSkip, sc.leanWin[:])
+		sc.leanAt = at
+		sc.leanN, sc.leanI = n, 0
+		if at.Partial {
+			sc.leanPartial = true
+		}
+		if err != nil {
+			if !errors.Is(err, io.EOF) {
+				return Symbol{}, false, err
+			}
+			return NewSymbol(RuneEOF, sc.leanFlags(at, RuneEOF)|FlagEOF), true, nil
+		}
+	}
+
+	lr := sc.leanWin[sc.leanI]
+
+	var flags uint
+	if sc.leanI == 0 {
+		flags = sc.leanFlags(sc.leanAt, lr.Rune)
+	} else {
+		flags = FlagNone
+		if sc.leanWin[sc.leanI-1].Rune == '\n' {
+			flags |= FlagBOL
+		}
+		if lr.Rune == '\n' {
+			flags |= FlagEOL
+		}
+	}
+
+	sc.leanI++
+	sc.leanSkip += lr.Size
+
+	return Symbol{r: lr.Rune, flags: uint8(flags), size: uint8(lr.Size)}, false, nil
+}
+
+// leanAdvance moves the cursor, which the lean read path left at the start of
+// the token, over the leanSkip bytes of the symbols read for the token, so it
+// sits where ReadLocatedRune would have left it. The stack of rp holds the
+// symbols the rules were shown, in order; a symbol read but not shown yet is
+// the rest of leanSkip.
+//
+// One Seek over the whole range counts the runes of the range as one decode of
+// it. That is what ReadLocatedRune counted, unless a Peek decoded an incomplete
+// sequence that later bytes completed (leanPartial). Then the cursor moves one
+// symbol at a time, so each symbol is counted as it was read.
+func (sc *Scanner) leanAdvance(rp *rulesProcessor) error {
+	if sc.leanSkip == 0 {
+		return nil
+	}
+	if !sc.leanPartial {
+		_, err := sc.cursor.Seek(int64(sc.leanSkip), io.SeekCurrent)
+		return err
+	}
+	done := 0
+	for i := 0; i < rp.Len(); i++ {
+		size := rp.at(i).Size()
+		if size == 0 || done+size > sc.leanSkip {
+			continue
+		}
+		if _, err := sc.cursor.Seek(int64(size), io.SeekCurrent); err != nil {
+			return err
+		}
+		done += size
+	}
+	if rest := sc.leanSkip - done; rest > 0 {
+		_, err := sc.cursor.Seek(int64(rest), io.SeekCurrent)
+		return err
+	}
+	return nil
+}
+
+// dropCarry drops the symbols carried past the last token, and the runes of
+// leanWin that are not shown yet. The next token reads from the cursor.
+func (sc *Scanner) dropCarry() {
+	sc.carry = sc.carry[:0]
+	sc.carryI = 0
+	sc.leanN, sc.leanI = 0, 0
+	sc.carryOK = false
+}
+
+// takeCarry decides, at the start of a token, whether the token uses the
+// symbols carried past the last token. It runs just after remarkSlot armed the
+// mark of the token, which is one mark of the cursor's epoch. start is the
+// byte offset of the cursor, where that mark is.
+//
+// The carry is used only when the cursor is where the last commit left it and
+// its epoch moved by that one mark only. The bytes at that offset are then
+// the bytes the carried symbols were decoded from, and no new mark moved the
+// retention floor back, so every carried symbol is within the retention limit
+// that Peek checked when it decoded it. Otherwise, for example after a caller
+// moved a shared cursor, took a checkpoint of it or reset it onto a new
+// source, the carry is dropped. It returns the index of the first carried
+// symbol.
+func (sc *Scanner) takeCarry(start int) int {
+	if !sc.carryOK || start != sc.carryAt || sc.lean.Epoch() != sc.carryEpoch+1 {
+		sc.dropCarry()
+		return 0
+	}
+	// The token uses the carry now. A token that commits keeps a new one
+	// (keepCarry). A token that is abandoned leaves carryOK false, so the
+	// next token drops what is left and reads from the cursor.
+	sc.carryOK = false
+	return sc.carryI
+}
+
+// keepCarry keeps, at the commit of a token, the symbols that the rules were
+// shown past its end, for the next token. The stack of rp holds the symbols
+// shown for the token. Its first read symbols are real symbols, and its first
+// textLen symbols are the token. Its first used symbols came from the carry,
+// from the carry index from on. end is the byte offset of the cursor after the
+// commit.
+//
+// A commit copies at most the symbols that the rules were shown past the end
+// of the token. Carried symbols that the rules were not shown stay where they
+// are, so a long carry is not copied for each token.
+func (sc *Scanner) keepCarry(rp *rulesProcessor, read, textLen, from, used, end int) {
+	if textLen <= used {
+		head := from + textLen
+		if used < read {
+			// The token read past the carry, so every carried symbol was
+			// shown, and the symbols from used on follow carry[head:].
+			n := copy(sc.carry, sc.carry[head:])
+			sc.carry = sc.carry[:n]
+			for i := used; i < read; i++ {
+				sc.carry = append(sc.carry, rp.at(i))
+			}
+			head = 0
+		}
+		sc.carryI = head
+	} else {
+		sc.carry = sc.carry[:0]
+		for i := textLen; i < read; i++ {
+			sc.carry = append(sc.carry, rp.at(i))
+		}
+		sc.carryI = 0
+	}
+	sc.carryAt = end
+	sc.carryEpoch = sc.lean.Epoch()
+	sc.carryOK = true
+}
+
+// leanFlags returns the BOF, BOL and EOL flags of the rune r at the position
+// at, as symbolFlags and readSymbol give them for the same position.
+func (sc *Scanner) leanFlags(at leanread.At, r rune) uint {
+	flags := uint(FlagNone)
+	if at.Start {
+		flags |= FlagBOF
+	}
+	if at.LineStart {
+		flags |= FlagBOL
+	}
+	if r == '\n' {
+		flags |= FlagEOL
+	}
+	if sc.starter != nil && at.Start {
+		flags = flags&^(FlagBOF|FlagBOL) | startFlags(sc.starter)
+	}
+	return flags
 }
 
 // symbolFlags derives a symbol's positional flags from the position it was read
@@ -612,12 +868,31 @@ func (sc *Scanner) nextToken() (*Token, Lookahead, error) {
 	mark := sc.remarkSlot(sc.marksNext)
 
 	tokenBytes := 0
+	sc.leanSkip, sc.leanPartial = 0, false
+
+	// start is the position of the token's first byte. On the lean read path
+	// the token first uses the symbols carried past the last token, when the
+	// cursor is still where that commit left it (see takeCarry). carryFrom
+	// is the index of the first of them in sc.carry.
+	start := mark.Pos()
+	carryFrom := 0
+	if sc.lean != nil {
+		carryFrom = sc.takeCarry(start.ByteOffset())
+	}
 
 	// abandon ends the token without committing it: the cursor is rewound to the
 	// token start so a failed Next consumes nothing and a retry starts over. The
 	// previous token's checkpoint is deliberately left active, so its context
 	// survives a failed call and an EOF probe.
 	abandon := func(err error) (*Token, Lookahead, error) {
+		sc.ctr.abandon(err)
+		if sc.lean != nil {
+			// The lean read path left the cursor at the start of the token.
+			// It moves over the symbols read, as ReadLocatedRune would have,
+			// so the reset below rewinds the same bytes. The reset restores
+			// the start of the token whether the move succeeds or not.
+			_ = sc.leanAdvance(processor)
+		}
 		_ = mark.Reset()
 		_ = mark.Release()
 		return nil, Lookahead{}, err
@@ -643,6 +918,7 @@ func (sc *Scanner) nextToken() (*Token, Lookahead, error) {
 			}
 		}
 
+		sc.ctr.symbol()
 		typ, textLen := processor.Process(sym)
 
 		// textLen < 0 means a rule is still active and needs more input.
@@ -661,8 +937,7 @@ func (sc *Scanner) nextToken() (*Token, Lookahead, error) {
 		// symbol read for the token, then the synthetic EOF symbol once it is
 		// read, which is always the last. read counts the stack without the EOF
 		// symbol, so it is the number of real symbols read.
-		stack := processor.Symbols()
-		read := len(stack)
+		read := processor.Len()
 		if isEOF {
 			read--
 		}
@@ -700,25 +975,47 @@ func (sc *Scanner) nextToken() (*Token, Lookahead, error) {
 		// The winner is a prefix of the real symbols on the stack, so it never
 		// includes the EOF symbol. Its runes are copied out below, before the
 		// next token's Reset reuses the stack.
-		winner := stack[:textLen]
-
+		//
 		// A short token's text is stored inline, in the same allocation as
 		// its Token; a longer one gets its own array (see tokenBox).
 		var box *tokenBox
 		var runes []rune
-		if len(winner) <= inlineTokenRunes {
+		if textLen <= inlineTokenRunes {
 			box = new(tokenBox)
-			runes = box.text[:len(winner):len(winner)]
+			runes = box.text[:textLen:textLen]
 		} else {
-			runes = make([]rune, len(winner))
+			runes = make([]rune, textLen)
 		}
-		spanBytes := 0
-		for i, s := range winner {
-			runes[i] = s.Rune()
-			spanBytes += s.Size()
+		spanBytes := processor.CopyText(runes)
+
+		if sc.lean != nil && !sc.leanPartial {
+			// The lean read path left the cursor at the start of the token.
+			// It moves over the token only, so it sits at the end of the
+			// token, and there is no step back. The symbols that the rules
+			// were shown past the end are carried to the next token (see
+			// keepCarry). The bytes of the overshoot are the bytes of the
+			// symbols read minus the bytes of the token: the After of the
+			// record.
+			if _, err := sc.cursor.Seek(int64(spanBytes), io.SeekCurrent); err != nil {
+				return abandon(fmt.Errorf("bytescan: commit cursor: %w", err))
+			}
+			end := sc.cursor.Cursor()
+			la := Lookahead{ReadEnd: isEOF, After: sc.leanSkip - spanBytes}
+			sc.keepCarry(processor, read, textLen, carryFrom, sc.carryI-carryFrom, end.ByteOffset())
+			return sc.commit(typ, runes, box, cursor.NewSpan(start, end), la)
 		}
 
-		start := mark.Pos()
+		if sc.lean != nil {
+			// A Peek of the token decoded an incomplete UTF-8 sequence
+			// (leanPartial), which later bytes can complete. Nothing is
+			// carried. The cursor moves over every symbol the rules were
+			// shown, one at a time, so it sits where ReadLocatedRune would
+			// have left it, and the step back below is the same.
+			sc.dropCarry()
+			if err := sc.leanAdvance(processor); err != nil {
+				return abandon(fmt.Errorf("bytescan: commit cursor: %w", err))
+			}
+		}
 
 		// Commit the cursor over exactly the matched bytes. The token is the
 		// prefix of what was read, so committing is stepping back over the
@@ -738,25 +1035,33 @@ func (sc *Scanner) nextToken() (*Token, Lookahead, error) {
 			}
 			end = sc.cursor.Cursor()
 			la.After = overshoot
+			sc.ctr.stepBack(overshoot)
 		}
 
-		span := cursor.NewSpan(start, end)
-
-		// The token is committed: its in-flight slot now holds a committed mark
-		// (remarkSlot stored or re-armed it there), and the oldest committed
-		// mark — the slot immediately ahead in the ring — is displaced. It is
-		// released, but its value stays in the slot to be re-armed in place on
-		// the next pass, so the reuse path allocates no checkpoint. A mark is
-		// never released by a call that did not commit a token.
-		if old := sc.marks[(sc.marksNext+1)%markSlots]; old != nil {
-			_ = old.Release()
-		}
-		sc.marksNext = (sc.marksNext + 1) % markSlots
-
-		if box != nil {
-			box.token = Token{typ: typ, text: runes, offset: span.Start().RuneOffset(), span: span}
-			return &box.token, la, nil
-		}
-		return NewTokenWithSpan(typ, runes, span), la, nil
+		return sc.commit(typ, runes, box, cursor.NewSpan(start, end), la)
 	}
+}
+
+// commit ends a token whose cursor sits at the end of span: it moves the ring
+// of marks on and builds the token. box holds the token when its text is
+// inline, and runes is its text.
+func (sc *Scanner) commit(typ TokenType, runes []rune, box *tokenBox, span cursor.Span, la Lookahead) (*Token, Lookahead, error) {
+	// The token is committed: its in-flight slot now holds a committed mark
+	// (remarkSlot stored or re-armed it there), and the oldest committed
+	// mark — the slot immediately ahead in the ring — is displaced. It is
+	// released, but its value stays in the slot to be re-armed in place on
+	// the next pass, so the reuse path allocates no checkpoint. A mark is
+	// never released by a call that did not commit a token.
+	if old := sc.marks[(sc.marksNext+1)%markSlots]; old != nil {
+		_ = old.Release()
+	}
+	sc.marksNext = (sc.marksNext + 1) % markSlots
+
+	sc.ctr.token(typ, box == nil)
+
+	if box != nil {
+		box.token = Token{typ: typ, text: runes, offset: span.Start().RuneOffset(), span: span}
+		return &box.token, la, nil
+	}
+	return NewTokenWithSpan(typ, runes, span), la, nil
 }

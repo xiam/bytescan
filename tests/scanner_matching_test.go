@@ -3,6 +3,7 @@ package tests
 import (
 	"fmt"
 	"io"
+	"slices"
 	"strings"
 	"sync"
 	"testing"
@@ -540,6 +541,83 @@ func TestScannerWithInputContainingRuneEOF(t *testing.T) {
 	}
 
 	assert.Equal(t, tokenKeys(expected), tokenKeys(found))
+}
+
+// TestEqualMatchesResolveToTheFirstRegisteredRule registers three rules in
+// each of their six orders. On each token, the longest match wins, and of the
+// rules with equal longest matches, the rule registered first wins. The
+// scanner decides several tokens in one run, so the test also covers the reset
+// of the rule states between tokens.
+func TestEqualMatchesResolveToTheFirstRegisteredRule(t *testing.T) {
+	const (
+		lexTypeLetters = bytescan.TokenType("LETTERS")
+		lexTypeAB      = bytescan.TokenType("AB")
+		lexTypeAOrB    = bytescan.TokenType("A_OR_B")
+		lexTypeSpace   = bytescan.TokenType("SPACE")
+	)
+	rules := map[bytescan.TokenType]func() bytescan.Rule{
+		lexTypeLetters: func() bytescan.Rule { return newRunePlusRule(isASCIILetter) },
+		lexTypeAB:      func() bytescan.Rule { return newLiteralRule("ab") },
+		lexTypeAOrB:    func() bytescan.Rule { return newRunePlusRule(isAOrB) },
+	}
+	// tokens lists the tokens of the input and, for each one, the rules
+	// whose match is the longest. The first of them in the order of
+	// registration is the expected type.
+	tokens := []struct {
+		text    string
+		longest []bytescan.TokenType
+	}{
+		{"ab", []bytescan.TokenType{lexTypeLetters, lexTypeAB, lexTypeAOrB}},
+		{" ", []bytescan.TokenType{lexTypeSpace}},
+		{"abc", []bytescan.TokenType{lexTypeLetters}},
+		{" ", []bytescan.TokenType{lexTypeSpace}},
+		{"ba", []bytescan.TokenType{lexTypeLetters, lexTypeAOrB}},
+		{" ", []bytescan.TokenType{lexTypeSpace}},
+		{"ab", []bytescan.TokenType{lexTypeLetters, lexTypeAB, lexTypeAOrB}},
+	}
+
+	orders := [][]bytescan.TokenType{
+		{lexTypeLetters, lexTypeAB, lexTypeAOrB},
+		{lexTypeLetters, lexTypeAOrB, lexTypeAB},
+		{lexTypeAB, lexTypeLetters, lexTypeAOrB},
+		{lexTypeAB, lexTypeAOrB, lexTypeLetters},
+		{lexTypeAOrB, lexTypeLetters, lexTypeAB},
+		{lexTypeAOrB, lexTypeAB, lexTypeLetters},
+	}
+	for _, order := range orders {
+		t.Run(fmt.Sprint(order), func(t *testing.T) {
+			var input strings.Builder
+			var expected []*bytescan.Token
+			for _, tok := range tokens {
+				want := tok.longest[0]
+				for _, typ := range order {
+					if slices.Contains(tok.longest, typ) {
+						want = typ
+						break
+					}
+				}
+				expected = append(expected, bytescan.NewTokenFromString(want, tok.text, input.Len()))
+				input.WriteString(tok.text)
+			}
+
+			lx := bytescan.New(strings.NewReader(input.String()))
+			for _, typ := range order {
+				lx.MustAddRule(typ, rules[typ]())
+			}
+			lx.MustAddRule(lexTypeSpace, whitespaceRule)
+
+			var found []*bytescan.Token
+			for {
+				tok, err := lx.Next()
+				if err == io.EOF {
+					break
+				}
+				require.NoError(t, err)
+				found = append(found, tok)
+			}
+			assert.Equal(t, tokenKeys(expected), tokenKeys(found))
+		})
+	}
 }
 
 // TestScannerWithManyRules is a stress test for a large number of rules.

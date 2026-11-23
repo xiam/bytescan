@@ -84,15 +84,15 @@ const (
 )
 
 // Allocation budgets, in allocations per token after the warm-up, measured
-// with textreader v0.4.0 and go1.25.4, without the race detector,
-// in the default run, with about 15% headroom: mixed tiers 22.22, mode driver
-// 3.96, byte stream 4.04. They are asserted only without the race detector:
-// sync.Pool drops items under -race, so the counts differ there (26.6,
-// 5.0 and 4.6) and are only logged.
+// on 2026-11-21 with go1.25.4, without the race detector,
+// in the default run, with 12 to 16% headroom: mixed tiers 13.38, mode
+// driver 2.50, byte stream 2.69. They are asserted only without the race
+// detector: sync.Pool drops items under -race, so the counts differ there
+// (14.8, 2.5 and 2.7) and are only logged.
 const (
-	soakMixedAllocBudget = 25.6
-	soakModeAllocBudget  = 4.55
-	soakByteAllocBudget  = 4.65
+	soakMixedAllocBudget = 15.1
+	soakModeAllocBudget  = 2.9
+	soakByteAllocBudget  = 3.1
 )
 
 // soakCheck names one check of the soak harness.

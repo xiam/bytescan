@@ -23,8 +23,9 @@ const _ = uint8(flagMask)
 // the byte adapter of package bytesource, each rune is one byte, U+0000 to
 // U+00FF.
 //
-// A Symbol is 8 bytes: the stack of a long open token holds one per input
-// rune, so its size sets most of the memory the token holds.
+// A Symbol is 8 bytes. The stack of a long open token does not hold Symbols: it
+// holds one packed entry of 4 bytes per input rune (rulesProcessor.buf), and
+// that entry sets most of the memory the token holds.
 type Symbol struct {
 	r rune
 

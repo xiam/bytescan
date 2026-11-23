@@ -233,8 +233,9 @@ const (
 
 	// openTokenLivePerByte is the most live heap, in bytes per input byte, that
 	// one open token of openTokenBytes may hold: the value measured with the
-	// current scanner at this input size (10.58 B per byte), plus 20%.
-	openTokenLivePerByte = 12.7
+	// current scanner at this input size (5.08 B per byte with the race
+	// detector, 5.04 without), plus 20%.
+	openTokenLivePerByte = 6.1
 
 	// openTokenHeapLimit stops the probe once the heap (live and garbage)
 	// passes it above the baseline, so a regression fails fast instead of

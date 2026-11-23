@@ -31,6 +31,8 @@ specification rather than against behavior.
 | [Open design questions](open-questions.md) | Every open question with its constraint, numbered |
 | [Cursor contract](cursor.md) | The positioned cursor `bytescan/cursor`: positions, checkpoints and replay, retention and its bound, checkpoint reuse, rune sources, byte mode, and the limits of the basic reader |
 | [Resumable lexing](resumable-lexing.md) | Lexing text that changes after it was lexed: the layers, the contract of each piece ("need more input", the mode state, the lookahead record, the lexer with state `statelex`, the change message, the queries), the table of edit cases, and what the REPL and the highlighter examples must be able to do |
+| [Table compiler](table-compiler.md) | A design that is not built ([open question 31](open-questions.md#question-31)): compiling a rule set built only from `rules/core` to a table of states, what would and would not change in the tokens, the proof of equal tokens, the cost and a recommendation |
+| [Measurement](measurement.md) | How bytescan's speed is measured, with tools internal to this module: the build tag `bench`, the metering reader and source, the engine counters, the method (lanes, runs, the median and its spread), the five reference cases and the report format |
 
 ## Status convention
 

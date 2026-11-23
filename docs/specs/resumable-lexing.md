@@ -160,7 +160,11 @@ every rule to the `Rule` value it was registered with. A rule sees one
 `Symbol` at a time: its rune, its size and four flags (`Symbol.Rune`,
 `Symbol.Size`, `Symbol.IsBOF`, `Symbol.IsBOL`, `Symbol.IsEOL`,
 `Symbol.IsEOF`). `symbolFlags` derives BOF from the position being the start
-of the stream (`Pos.IsStart`) and BOL from rune column zero. After
+of the stream (`Pos.IsStart`) and BOL from rune column zero. On the lean read
+path of a `*cursor.Reader`, `Scanner.leanFlags` and `Scanner.readSymbolLean`
+derive the same flags: BOF and BOL of the first symbol of a token from the
+position at the cursor, and BOL of a later symbol from a newline before it
+(`TestLeanReadPathMatchesPublic`, `TestLeanReadPathReferenceCases`). After
 `Reader.ResetStart`, the BOF and BOL flags at offset 0 come from the start
 instead ([Starting a scan in the middle](#starting-a-scan-in-the-middle)). So, for rules
 that keep their progress only in the `Rule` values they return, the token at
@@ -184,9 +188,11 @@ does not know whether a rule is pure: a `Rule` is a function value. See
 of the rule-authoring guide.
 
 **Current contract — a record of how far a token looked, on request.**
-`Scanner.nextToken` commits a token by stepping the cursor back over the
-symbols it read past the token's end. Before the step back, it notes how far
-it read. `Scanner.NextLookahead` returns that record with the token
+`Scanner.nextToken` commits a token so that the cursor sits at the token's
+end. Over a `*cursor.Reader` it moves the cursor over the token only, and it
+keeps the symbols it read past the token's end for the next token
+(`Scanner.keepCarry`). Over another cursor it steps the cursor back over
+them. Before the commit, it notes how far it read. `Scanner.NextLookahead` returns that record with the token
 ([The lookahead record](#the-lookahead-record)). `Scanner.Next` drops the
 record. A `Token` reports its type, its text and its span (`Token.Type`,
 `Token.Text`, `Token.Span`) and nothing about what was read after its end.
@@ -589,7 +595,9 @@ rules see EOF and settle for less) and the blocked call.
   `WORD foo` and `NL ⏎`, and then the signal (`TestMoreInputCompleteTokens`).
 - **The unfinished token.** It is not returned. The scanner steps back to its
   start, as a failed `Next` does, and the next call lexes it again from its
-  start with the new input. For every split point of a set of inputs, the
+  start with the new input. Symbols that the scanner kept from the token
+  before are read again from the cursor
+  (`TestCarryMoreInputAtTokenBoundary`). For every split point of a set of inputs, the
   tokens before the signal and the tokens after the rest of the input and the
   true end equal the tokens of one scan of the whole input
   (`TestMoreInputSplit` over an `io.Reader`, `TestMoreInputSplitRuneSource`
@@ -755,8 +763,8 @@ lookahead method to `modes.Driver` or to `modes.StackDriver`.
 
 **How it satisfies the constraint.** The record is one number and one mark
 for each token. The number is taken from the cursor position after the last
-symbol that the rules were shown (`Scanner.nextToken` holds it before it
-steps back), so it counts the symbols shown to the rules, not the bytes the
+symbol that the rules were shown (`Scanner.nextToken` takes it from the
+symbols read, before it commits the token), so it counts the symbols shown to the rules, not the bytes the
 cursor buffered. The VM gains no lookahead mechanism: the scanner only notes
 how far it read ([principle 5](design-principles.md#principle-5-lookahead-belongs-to-the-rule)).
 `Next` and `NextLookahead` share `Scanner.nextToken`, and `Next` drops the
