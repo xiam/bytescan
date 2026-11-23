@@ -53,25 +53,25 @@ type engineShape struct {
 }
 
 // engineShapes are the shapes S3, S4 and S5 of that study. Their ceilings
-// are about 15% above the values measured with the current engine (S3 4.00,
-// S4 3.00, S5 7.00 allocations per token, the Token included).
+// are about 15% above the values measured with the current engine (S3 2.50,
+// S4 2.00, S5 2.50 allocations per token, the Token included).
 var engineShapes = []engineShape{
 	{
-		name: "S3 core.RuneRun", cycle: "ab ", tokens: 2, ceiling: 4.6,
+		name: "S3 core.RuneRun", cycle: "ab ", tokens: 2, ceiling: 2.9,
 		rules: func(lx *bytescan.Scanner) {
 			lx.MustAddRule("WORD", core.RuneRun(core.ASCIILetter))
 			lx.MustAddRule("SPACE", core.RuneRun(core.RuneSet(" ")))
 		},
 	},
 	{
-		name: "S4 base.ASCIIIdentifier", cycle: "ab ", tokens: 2, ceiling: 3.45,
+		name: "S4 base.ASCIIIdentifier", cycle: "ab ", tokens: 2, ceiling: 2.3,
 		rules: func(lx *bytescan.Scanner) {
 			lx.MustAddRule("WORD", base.ASCIIIdentifier())
 			lx.MustAddRule("SPACE", handSpace)
 		},
 	},
 	{
-		name: "S5 base.Quoted", cycle: `"ab" `, tokens: 2, ceiling: 8.05,
+		name: "S5 base.Quoted", cycle: `"ab" `, tokens: 2, ceiling: 2.9,
 		rules: func(lx *bytescan.Scanner) {
 			lx.MustAddRule("STRING", base.Quoted('"', '\\'))
 			lx.MustAddRule("SPACE", handSpace)
@@ -100,8 +100,9 @@ func newShapeScanner(tb testing.TB, shape engineShape) (*bytescan.Scanner, func(
 }
 
 // TestEngineAllocationsPerToken covers the steady-state allocations of the
-// composed engine: about two per symbol that a composed rule reads
-// while it is alive, and none for the step that ends it.
+// composed engine: one per symbol that a composed rule reads while it is
+// alive with at most four threads, as in these shapes, and none for the step
+// that ends it.
 //
 // The ceilings hold only without the race detector. Under -race,
 // sync.Pool.Put drops about one item in four, so the pooled stepper of a step

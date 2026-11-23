@@ -16,38 +16,87 @@ type ruleState struct {
 type rulesProcessor struct {
 	rules []TokenType
 
-	states map[TokenType]*ruleState
-	buf    []Symbol
+	// states holds the state of each rule in the order of rules: states[i]
+	// is the state of the rule rules[i]. The loops index it by rule number,
+	// so the order of registration is the order of evaluation and the
+	// tie-break of equal matches (pickBestMatch).
+	states []ruleState
+
+	// ctr points at the engine counters of the scanner in the build with the
+	// tag bench, and is empty in the normal build (counters_on.go,
+	// counters_off.go). It is not the last field, so its size of zero in the
+	// normal build adds no padding.
+	ctr ruleCounters
+
+	// buf is the token's stack: one packed entry for each symbol passed to
+	// Process since the last Reset (see push). An entry is 4 bytes, half
+	// the size of a Symbol, so the stack of a long token holds and copies half
+	// as much as a stack of Symbols.
+	buf []uint32
+
+	// wide holds the symbols that do not fit in a packed entry, in the order
+	// they were pushed; their entries in buf hold wideEntry and their index
+	// here. The scanner's own symbols always fit, so wide stays empty unless a
+	// Cursor of the caller reports a rune or a size out of the packed range.
+	wide []Symbol
 }
+
+// The layout of a packed stack entry. A symbol fits when its rune is -1
+// (RuneEOF) to 1<<21 - 2, which covers every Unicode code point, and its size
+// is at most 15 bytes. The flags always fit: flagMask is below 1<<5.
+const (
+	runeBits  = 21 // the rune plus one, so RuneEOF is zero
+	flagShift = runeBits
+	flagBits  = 5
+	sizeShift = flagShift + flagBits
+	sizeBits  = 4
+
+	runeField = 1<<runeBits - 1
+	flagField = 1<<flagBits - 1
+	sizeField = 1<<sizeBits - 1
+
+	// wideEntry marks an entry whose symbol is in rulesProcessor.wide: the
+	// other bits are its index there.
+	wideEntry = 1 << 31
+)
+
+// The packed flags field must hold every defined flag. The conversion fails to
+// compile if flagMask does not fit in flagBits bits.
+const _ = uint8(flagField - flagMask)
+
+// The packed fields must not reach the wide-entry bit.
+const _ = uint32(wideEntry - 1<<(sizeShift+sizeBits))
 
 func newRulesProcessor(rules []TokenType, initialStates map[TokenType]Rule) *rulesProcessor {
 	if len(rules) != len(initialStates) {
 		panic("rules and initialStates length mismatch")
 	}
 
-	states := map[TokenType]*ruleState{}
+	states := make([]ruleState, 0, len(rules))
 	for _, typ := range rules {
 		if initialStates[typ] == nil {
 			panic(fmt.Sprintf("scanner for rule %q is nil", typ))
 		}
-		states[typ] = &ruleState{
+		states = append(states, ruleState{
 			initialRule: initialStates[typ],
 			rule:        initialStates[typ],
 			lastAccept:  -1,
 			isActive:    true,
-		}
+		})
 	}
 
 	return &rulesProcessor{
 		rules:  rules,
 		states: states,
-		buf:    make([]Symbol, 0, 4096),
+		buf:    make([]uint32, 0, 4096),
 	}
 }
 
 func (rp *rulesProcessor) Reset() {
 	rp.buf = rp.buf[:0]
-	for _, state := range rp.states {
+	rp.wide = rp.wide[:0]
+	for i := range rp.states {
+		state := &rp.states[i]
 		state.rule = state.initialRule
 		state.lastAccept = -1
 		state.isActive = true
@@ -92,24 +141,28 @@ func (rp *rulesProcessor) Process(s Symbol) (TokenType, int) {
 //
 // An accept that the rule recorded earlier stays in each case.
 func (rp *rulesProcessor) processSymbol(s Symbol) int {
-	rp.buf = append(rp.buf, s)
+	rp.push(s)
 	atEOF := s.IsEOF()
 
-	activeRules := 0
-	for _, typ := range rp.rules {
+	// calls and pushbacks feed the engine counters only: the normal build
+	// drops them with the inlined empty call below.
+	activeRules, calls, pushbacks := 0, 0, 0
+	for i := range rp.states {
 		var pushbackCount int
 
-		state := rp.states[typ]
+		state := &rp.states[i]
 		if !state.isActive {
 			continue
 		}
 
 		nextRule, nextState := callRule(state.rule, s)
+		calls++
 		for nextState == StatePushBack {
 			pushbackCount++
 			if nextRule != nil && pushbackCount <= len(rp.buf) {
-				pushedBackSymbol := rp.buf[len(rp.buf)-pushbackCount]
+				pushedBackSymbol := rp.at(len(rp.buf) - pushbackCount)
 				nextRule, nextState = callRule(nextRule, pushedBackSymbol)
+				pushbacks++
 			} else {
 				nextRule, nextState = nil, StateReject
 			}
@@ -142,6 +195,8 @@ func (rp *rulesProcessor) processSymbol(s Symbol) int {
 		}
 	}
 
+	rp.ctr.step(calls+pushbacks, pushbacks, activeRules)
+
 	return activeRules
 }
 
@@ -149,10 +204,12 @@ func (rp *rulesProcessor) pickBestMatch() (TokenType, int) {
 	bestMatch := TokenTypeUnknown
 	bestMatchLen := -1
 
-	for _, typ := range rp.rules {
-		state := rp.states[typ]
+	// The strict comparison keeps the first rule of equal matches: the rule
+	// registered first.
+	for i := range rp.states {
+		state := &rp.states[i]
 		if state.lastAccept > bestMatchLen {
-			bestMatch = typ
+			bestMatch = rp.rules[i]
 			bestMatchLen = state.lastAccept
 		}
 	}
@@ -184,9 +241,59 @@ func callRule(r Rule, s Symbol) (next Rule, state State) {
 	return next, state
 }
 
-// Symbols returns the token's stack: every symbol passed to Process since the
-// last Reset, in order, the synthetic EOF symbol included once it is passed.
-// The slice aliases the stack, so it is valid only until the next Reset.
-func (rp *rulesProcessor) Symbols() []Symbol {
-	return rp.buf
+// push pushes s on the stack: packed when it fits, and in wide otherwise.
+// Either way, at returns s unchanged.
+func (rp *rulesProcessor) push(s Symbol) {
+	// s.r+1 wraps for the largest rune, and a negative sum converts to a
+	// large uint32: both fail the range check.
+	v := uint32(s.r + 1)
+	if v <= runeField && s.flags <= flagField && s.size <= sizeField {
+		rp.buf = append(rp.buf, v|uint32(s.flags)<<flagShift|uint32(s.size)<<sizeShift)
+		return
+	}
+	rp.buf = append(rp.buf, wideEntry|uint32(len(rp.wide)))
+	rp.wide = append(rp.wide, s)
+}
+
+// at returns the symbol at index i of the stack, 0 being the first symbol of
+// the token.
+func (rp *rulesProcessor) at(i int) Symbol {
+	v := rp.buf[i]
+	if v&wideEntry != 0 {
+		return rp.wide[v&^wideEntry]
+	}
+	return Symbol{
+		r:     rune(v&runeField) - 1,
+		flags: uint8(v >> flagShift & flagField),
+		size:  uint8(v >> sizeShift & sizeField),
+	}
+}
+
+// Len returns the number of symbols on the stack: every symbol passed to
+// Process since the last Reset, the synthetic EOF symbol included once it is
+// passed.
+func (rp *rulesProcessor) Len() int {
+	return len(rp.buf)
+}
+
+// CopyText copies the runes of the first len(dst) symbols of the stack into
+// dst, in order, and returns the sum of their sizes (Symbol.Size). The stack is
+// the only copy of the token's symbols, so the caller copies the text before
+// the next Reset. len(dst) must not exceed Len.
+func (rp *rulesProcessor) CopyText(dst []rune) int {
+	entries := rp.buf[:len(dst)]
+	size := 0
+	if len(rp.wide) == 0 {
+		for i, v := range entries {
+			dst[i] = rune(v&runeField) - 1
+			size += int(v >> sizeShift & sizeField)
+		}
+		return size
+	}
+	for i := range entries {
+		s := rp.at(i)
+		dst[i] = s.r
+		size += int(s.size)
+	}
+	return size
 }

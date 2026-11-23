@@ -263,6 +263,7 @@ func (c *Checkpoint) markLocked(t *Reader) {
 func (t *Reader) Checkpoint() *Checkpoint {
 	t.mu.Lock()
 	defer t.mu.Unlock()
+	t.ctr.lock()
 
 	// Marking is a non-consuming operation: it records the logical cursor as it
 	// stands and never settles, rewinds, or otherwise moves it. A pending
@@ -274,6 +275,7 @@ func (t *Reader) Checkpoint() *Checkpoint {
 	c.mu.Unlock()
 	c.reader.Store(t)
 	t.checkpoints = append(t.checkpoints, c)
+	t.epoch.Add(1)
 
 	return c
 }
@@ -347,6 +349,7 @@ func (t *Reader) Remark(c *Checkpoint) error {
 
 	t.mu.Lock()
 	defer t.mu.Unlock()
+	t.ctr.lock()
 
 	// The CAS proved c is not active on any reader, so the value is not in the
 	// active set: re-arming appends it. The marked position is the logical
@@ -359,6 +362,7 @@ func (t *Reader) Remark(c *Checkpoint) error {
 	c.active = true
 	c.mu.Unlock()
 	t.checkpoints = append(t.checkpoints, c)
+	t.epoch.Add(1)
 
 	return nil
 }
@@ -389,6 +393,7 @@ func (c *Checkpoint) Active() bool {
 
 	t.mu.Lock()
 	defer t.mu.Unlock()
+	t.ctr.lock()
 
 	// Re-verify under c.mu: the value may have migrated to another reader or
 	// been released between the Load and the lock, in which case its state
@@ -426,6 +431,7 @@ func (c *Checkpoint) Reset() error {
 
 	t.mu.Lock()
 	defer t.mu.Unlock()
+	t.ctr.lock()
 
 	// Re-verify under c.mu and copy the mark's fields there: the value may
 	// have been released or migrated to another reader between the Load and
@@ -483,6 +489,7 @@ func (c *Checkpoint) Reset() error {
 	t.lastRuneSize = -1
 	t.utf8Carry = carry
 	t.utf8CarryLen = carryLen
+	t.ctr.replay(cur - byteOff)
 
 	return nil
 }
@@ -505,6 +512,7 @@ func (c *Checkpoint) Commit() error {
 
 	t.mu.Lock()
 	defer t.mu.Unlock()
+	t.ctr.lock()
 
 	// Re-verify under c.mu: the value may have been released here and
 	// re-armed on another reader between the Load and the lock, in which
@@ -538,6 +546,7 @@ func (c *Checkpoint) Release() error {
 
 	t.mu.Lock()
 	defer t.mu.Unlock()
+	t.ctr.lock()
 
 	// Re-verify under c.mu: the value may have been released here and
 	// re-armed on another reader between the Load and the lock, in which
@@ -578,6 +587,7 @@ func (t *Reader) releaseCheckpointLocked(c *Checkpoint) error {
 func (t *Reader) RetainedBytes() int {
 	t.mu.Lock()
 	defer t.mu.Unlock()
+	t.ctr.lock()
 
 	floor := t.retainFloor()
 	if floor >= t.pos.Offset() {
@@ -598,6 +608,7 @@ func (t *Reader) RetainedBytes() int {
 func (t *Reader) SpanText(s Span) (string, error) {
 	t.mu.Lock()
 	defer t.mu.Unlock()
+	t.ctr.lock()
 
 	start, end := s.start.byteOffset, s.end.byteOffset
 	if end < start {
@@ -622,6 +633,7 @@ func (t *Reader) SpanText(s Span) (string, error) {
 func (t *Reader) Context(s Span, before, after int) (string, error) {
 	t.mu.Lock()
 	defer t.mu.Unlock()
+	t.ctr.lock()
 
 	if before < 0 || after < 0 {
 		return "", fmt.Errorf("cursor: negative context width: before=%d after=%d", before, after)

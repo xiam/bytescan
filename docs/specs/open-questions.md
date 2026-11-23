@@ -123,6 +123,33 @@ questions 16 to 21, 23 to 26 and 28 to 30 on 2026-11-18; they are under
   ([What the cases show](resumable-lexing.md#what-the-cases-show),
   [A bound on the work of one edit](resumable-lexing.md#a-bound-on-the-work-of-one-edit))
 
+  **What the measurement of 2026-11-20 showed** (the statelex report under
+  `internal-docs/benchmarks/`, which is not exported; benchmark
+  `BenchmarkEdit` in `statelex`; [The statelex report](measurement.md#the-statelex-report)).
+  On texts of growing sizes under rule sets A and B, the latency of a key
+  typed, a backspace and a deleted selection did not grow in proportion to
+  the size: it grew only as fast as the visited tokens, with the logarithm of
+  the size. The opening quote at the start of the text under rule set B, and
+  its removal, re-lexed the whole text, and their latency grew in proportion
+  to the size, close to the latency of loading the same text. `SetText` also
+  grew in proportion to the size, from its comparison of the whole text, not
+  from its re-lex. So the edit with no sync point is the only edit shape whose
+  re-lex grows with the size. The measurement does not choose a bound, and
+  the question stays open.
+
+Question 31 comes from the design of the [table compiler](table-compiler.md).
+
+- <a name="question-31"></a>**31. A table for pure core rules** — whether
+  bytescan compiles a rule set built only from `rules/core` to a table of
+  states, and in which form: one table for each composed rule, or one table
+  for the whole rule set of a scanner. The constraint: the tokens, the
+  symbols read for each token and the errors stay those of the engine, no
+  exported name changes, and a rule that is not built only from `rules/core`
+  keeps the engine. The design, its proof of equal tokens, its cost and its
+  recommendation are in [Table compiler](table-compiler.md); the proposal is
+  in the [decision log](design-principles.md#owner-decisions), marked
+  "proposed". The owner has not decided.
+
 ## Closed
 
 These are in the [decision log](design-principles.md#closed-design-questions):

@@ -14,7 +14,9 @@
 // reject, every pushback chain comes from PushBack, and a rule keeps its state
 // only in the Rule values it returns and in immutable constructor parameters.
 // One Rule value can therefore be registered on any number of scanners and is
-// reused for every token.
+// reused for every token. Calling a Rule value that a composed rule returns
+// never changes what another one reads: each call keeps its working storage
+// to itself (TestCombinatorRetainedAncestor).
 //
 // # Naming
 //

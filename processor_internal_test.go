@@ -203,3 +203,128 @@ func TestCallRule(t *testing.T) {
 		check(t)
 	})
 }
+
+// TestStackKeepsEverySymbol covers the packed stack: at returns every symbol
+// that push stored, unchanged, and CopyText copies the runes and sums the
+// sizes. The symbols include the edges of the packed range and symbols out of
+// it, which a Cursor of the caller can report and which go to the wide list.
+func TestStackKeepsEverySymbol(t *testing.T) {
+	const allFlags = uint8(flagMask)
+	edges := []Symbol{
+		{r: RuneEOF, flags: uint8(FlagEOF)},
+		{r: 0},
+		{r: 'a', flags: allFlags, size: 1},
+		{r: 0x10FFFF, size: 4},
+		{r: runeField - 1, flags: allFlags, size: sizeField}, // the largest that fits
+		{r: runeField}, // the rune is out of range
+		{r: -2},        // a probe rune of rules/core
+		{r: RuneEOF - 1000},
+		{r: 1<<31 - 1}, // s.r+1 wraps
+		{r: -1 << 31},
+		{r: 'b', size: sizeField + 1}, // the size is out of range
+		{r: 'c', size: 255},
+		{r: 'd', flags: 0x80}, // a flag bit no Symbol of the package holds
+	}
+
+	for _, wideFirst := range []bool{false, true} {
+		rp := newRulesProcessor(nil, map[TokenType]Rule{})
+		syms := edges
+		if wideFirst {
+			syms = append([]Symbol{{r: runeField}}, edges...)
+		}
+		// Two rounds: Reset empties the stack and the wide list.
+		for round := 0; round < 2; round++ {
+			rp.Reset()
+			for _, s := range syms {
+				rp.push(s)
+			}
+			for i := 0; i < 3*len(syms); i++ { // past the end of syms: packed symbols after wide ones
+				rp.push(syms[i%len(syms)])
+			}
+			want := make([]Symbol, 0, 4*len(syms))
+			want = append(want, syms...)
+			for i := 0; i < 3*len(syms); i++ {
+				want = append(want, syms[i%len(syms)])
+			}
+
+			assert.Equal(t, len(want), rp.Len())
+			wantRunes := make([]rune, len(want))
+			wantSize := 0
+			for i, s := range want {
+				assert.Equal(t, s, rp.at(i), "symbol %d (wide first: %v)", i, wideFirst)
+				wantRunes[i] = s.r
+				wantSize += int(s.size)
+			}
+			for _, n := range []int{0, 1, len(want)} {
+				got := make([]rune, n)
+				size := rp.CopyText(got)
+				assert.Equal(t, wantRunes[:n], got)
+				sum := 0
+				for _, s := range want[:n] {
+					sum += int(s.size)
+				}
+				assert.Equal(t, sum, size)
+			}
+		}
+	}
+
+	// The scanner's own symbols always fit: a rune of the cursor (at most
+	// 0x10FFFF, or utf8.RuneError), a size of 1 to 4, the defined flags.
+	rp := newRulesProcessor(nil, map[TokenType]Rule{})
+	for _, s := range []Symbol{{r: 0x10FFFF, flags: allFlags, size: 4}, {r: RuneEOF, flags: allFlags}} {
+		rp.push(s)
+	}
+	assert.Empty(t, rp.wide, "a symbol of the scanner went to the wide list")
+}
+
+// TestPushBackShowsWideSymbols covers a pushback chain over a stack that mixes
+// packed and wide symbols: every symbol a pushback shows is the one pushed
+// there, and the match length counts both kinds.
+func TestPushBackShowsWideSymbols(t *testing.T) {
+	input := []Symbol{
+		{r: 'a', size: 1},
+		{r: -7},
+		{r: 'b', size: 200},
+		{r: 0x10FFFF, size: 4},
+		{r: runeField + 3, flags: uint8(FlagBOL)},
+		{r: 'c', size: 1},
+	}
+	end := Symbol{r: ';', size: 1}
+
+	var shown []Symbol
+	var chain func(left int) Rule
+	chain = func(left int) Rule {
+		return func(s Symbol) (Rule, State) {
+			shown = append(shown, s)
+			if left == 0 {
+				return nil, StateAccept
+			}
+			return chain(left - 1), StatePushBack
+		}
+	}
+	// Engine probe: it continues over the input and, at end, pushes back over
+	// end and every input symbol but the first (breaks practices 2 and 6).
+	var step Rule
+	step = func(s Symbol) (Rule, State) {
+		if s == end {
+			return chain(len(input) - 1), StatePushBack
+		}
+		return step, StateContinue
+	}
+
+	rp := newRulesProcessor([]TokenType{"R"}, map[TokenType]Rule{"R": step})
+	for _, s := range input {
+		_, n := rp.Process(s)
+		assert.Equal(t, -1, n)
+	}
+	typ, n := rp.Process(end)
+	assert.Equal(t, TokenType("R"), typ)
+	assert.Equal(t, 1, n)
+
+	want := []Symbol{end}
+	for i := len(input) - 1; i >= 1; i-- {
+		want = append(want, input[i])
+	}
+	assert.Equal(t, want, shown)
+	assert.NotEmpty(t, rp.wide)
+}

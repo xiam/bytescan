@@ -5,7 +5,7 @@ This directory is the documentation home for `bytescan`.
 - [specs/core-contract.md](specs/core-contract.md) is the index of the
   **canonical prose specification**: the project purpose, the status
   convention, the terminology, and a map from every former section to its
-  document. The specification is split into nine documents under
+  document. The specification is split into ten documents under
   [`specs/`](specs/core-contract.md#documents):
   - [consumer-contract.md](specs/consumer-contract.md): what `Next()`
     returns, the scanner/consumer boundary, and illustrative scenarios;
@@ -24,7 +24,11 @@ This directory is the documentation home for `bytescan`.
   - [resumable-lexing.md](specs/resumable-lexing.md): the contract for
     lexing text that changes after it was lexed (a REPL line, a document in
     an editor): "need more input", the mode state, the lookahead record and
-    the lexer with state, `statelex`.
+    the lexer with state, `statelex`;
+  - [measurement.md](specs/measurement.md): how bytescan's speed is
+    measured: the build tag, the counters, the method, the reference cases
+    and the report format. The tools are internal, and no measured number is
+    in `docs/`.
 
   Every substantive statement carries an explicit status — **design
   principle**, **current contract**, **intended capability**, or **open design

@@ -82,9 +82,14 @@ listed in the
 before each token, so a mode that depends on a prior token cannot live in the
 `Rule` chain. The package is built only on `NewWithCursor` and `Release` (see
 [Concurrency boundaries](resources-and-streams.md#concurrency-boundaries));
-after a commit the cursor sits exactly at the end of the token (the commit
+after a commit the cursor sits exactly at the end of the token. The commit
 block of `Scanner.nextToken` steps the cursor back over the speculative
-overshoot). The engine is unchanged.
+overshoot. Over a `*cursor.Reader` it moves the cursor over the token only
+and keeps the overshoot for the next token of the same scanner
+(`Scanner.keepCarry`). `Release` drops what it keeps, and a scanner whose
+cursor moved since its last token drops it too, so the scanner of the next
+mode reads from the end of the token (`TestCarryModeSwitchBetweenTokens`).
+The engine is unchanged.
 
 For example, switching to a "string-interpolation" rule set inside
 `"...${ ... }..."` and back out is state carried across tokens, not just within

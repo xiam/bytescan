@@ -3,8 +3,9 @@
 // column.
 //
 // The package is part of the bytescan module but does not depend on the rest
-// of it: its non-test files import only the standard library and
-// cursor/position. Any program can use it on its own, without the scanner.
+// of it: in a normal build, its non-test files import only the standard
+// library and cursor/position. Any program can use it on its own, without the
+// scanner.
 //
 // The package has two layers.
 //
@@ -44,6 +45,7 @@ import (
 	"io"
 	"math"
 	"sync"
+	"sync/atomic"
 	"unicode/utf8"
 
 	"github.com/xiam/bytescan/cursor/position"
@@ -128,10 +130,22 @@ type Reader struct {
 	utf8Carry    [utf8.UTFMax]byte
 	utf8CarryLen int
 
+	// ctr holds the engine counters in the build with the tag bench, and
+	// nothing in the normal build (counters_on.go, counters_off.go). It is not
+	// the last field, so its size of zero in the normal build adds no padding.
+	// It comes after the fields of the hot path, so the counters of the build
+	// with the tag do not move them.
+	ctr readerCounters
+
 	// start describes where the source begins in a larger text. It is set by
 	// ResetStart, and it is Start{LineStart: true} for a reader that is never
 	// reset.
 	start Start
+
+	// epoch counts the calls of ResetStart and the marks made by Checkpoint
+	// and Remark. The lean read path reports it (leanReader.Epoch) without
+	// the lock, so it is atomic.
+	epoch atomic.Uint64
 }
 
 // New returns a new Reader that reads from r with the default buffer
@@ -209,10 +223,20 @@ func newTextReader(opts ...Option) *Reader {
 		t.capacity = utf8.UTFMax
 	}
 	t.buf = make([]byte, t.capacity)
+	t.ctr.initBuffer(len(t.buf))
 	return t
 }
 
 func (t *Reader) fillAtLeast(n int) (bool, error) {
+	return t.fillAtLeastAt(0, n)
+}
+
+// fillAtLeastAt is fillAtLeast for the n bytes that start skip bytes after the
+// logical cursor, which the buffer holds. The bytes before skip count toward
+// what the buffer must hold, but they are not owed to this caller: a source
+// error is owed only after bytes at or after skip. The lean read path (lean.go)
+// fills there without moving the cursor. With skip 0 it is fillAtLeast.
+func (t *Reader) fillAtLeastAt(skip, n int) (bool, error) {
 	if n < 0 {
 		return false, fmt.Errorf("invalid size: %d", n)
 	}
@@ -222,26 +246,26 @@ func (t *Reader) fillAtLeast(n int) (bool, error) {
 		return true, nil
 	}
 
-	if n > t.capacity && t.runeSrc == nil && len(t.checkpoints) == 0 {
+	if skip+n > t.capacity && t.runeSrc == nil && len(t.checkpoints) == 0 {
 		// The requested read is larger than the buffer this is not allowed.
 		return false, ErrBufferTooSmall
 	}
 
 	// If we already have enough data in the buffer, just return.
-	if n <= t.w-t.r {
+	if skip+n <= t.w-t.r {
 		return true, nil
 	}
 
 	// The next read will be beyond the buffer, so we need to release space.
 	// Compaction stops at the oldest active checkpoint: bytes a checkpoint may
 	// still need to replay are never discarded.
-	if t.r+n >= len(t.buf) {
+	if t.r+skip+n >= len(t.buf) {
 		t.compact()
 	}
 
 	var readErr error
 
-	for t.w-t.r < n && readErr == nil {
+	for t.w-t.r < skip+n && readErr == nil {
 		// Make room for a rune held over from an earlier window, or for the
 		// next read when a checkpoint still needs the bytes already buffered.
 		if t.hasPending && len(t.buf)-t.w < encodedRuneLen(t.pendingRune) {
@@ -281,10 +305,10 @@ func (t *Reader) fillAtLeast(n int) (bool, error) {
 		// The source has no input now. The error is not sticky, so it is
 		// reported here and not deferred behind the buffered bytes: the caller
 		// decides whether the bytes it has are enough.
-		return t.w-t.r >= n, readErr
+		return t.w-t.r >= skip+n, readErr
 	}
 
-	if !errors.Is(readErr, io.EOF) && t.w-t.r > 0 {
+	if !errors.Is(readErr, io.EOF) && t.w-t.r > skip {
 		// The source failed, but buffered bytes are still owed to the caller.
 		// Serve them first: the sticky error surfaces once the buffer drains,
 		// which is what makes replay from a checkpoint deterministic and keeps
@@ -292,7 +316,7 @@ func (t *Reader) fillAtLeast(n int) (bool, error) {
 		return true, nil
 	}
 
-	return t.w-t.r >= n, readErr
+	return t.w-t.r >= skip+n, readErr
 }
 
 // encodedRuneLen reports how many bytes enc holds once the rune is encoded to
@@ -316,9 +340,13 @@ func (t *Reader) readInto(p []byte) (int, error) {
 		err error
 	)
 	if t.runeSrc != nil {
+		// A held rune is encoded without a read from the source.
+		read := !t.hasPending
 		n, err = t.fillRunes(p)
+		t.ctr.fill(read, n)
 	} else {
 		n, err = t.br.Read(p)
+		t.ctr.fill(true, n)
 	}
 
 	// ErrMoreInput is not sticky: the source has no input now, and the next
@@ -379,6 +407,7 @@ func (t *Reader) grow(min int) error {
 	grown := make([]byte, newLen)
 	copy(grown, t.buf[:t.w])
 	t.buf = grown
+	t.ctr.grow(newLen)
 
 	return nil
 }
@@ -401,6 +430,7 @@ func (t *Reader) retentionHeadroom() int {
 func (t *Reader) retainFloor() int {
 	floor := t.pos.Offset()
 
+	t.ctr.floorScan(len(t.checkpoints))
 	for _, c := range t.checkpoints {
 		if c == nil {
 			continue
@@ -433,6 +463,7 @@ func (t *Reader) compact() {
 		shift = t.r
 	}
 
+	t.ctr.compaction(t.w - shift)
 	copy(t.buf, t.buf[shift:t.w])
 	t.w -= shift
 	t.r -= shift
@@ -546,9 +577,16 @@ func (t *Reader) scanLocked(b []byte) {
 // ErrMoreInput before the rune is complete, the fill returns that error and
 // the incomplete sequence stays in the buffer for the next read.
 func (t *Reader) fillRuneLocked() error {
+	return t.fillRuneAtLocked(0)
+}
+
+// fillRuneAtLocked is fillRuneLocked for the rune that starts skip bytes after
+// the logical cursor, which the buffer holds. The lean read path (lean.go)
+// peeks there without moving the cursor. With skip 0 it is fillRuneLocked.
+func (t *Reader) fillRuneAtLocked(skip int) error {
 	if t.byteMode {
-		_, err := t.fillAtLeast(1)
-		if err != nil && t.w-t.r > 0 && errors.Is(err, ErrMoreInput) {
+		_, err := t.fillAtLeastAt(skip, 1)
+		if err != nil && t.w-t.r > skip && errors.Is(err, ErrMoreInput) {
 			// The byte arrived with the signal: the read does not need more.
 			return nil
 		}
@@ -556,7 +594,8 @@ func (t *Reader) fillRuneLocked() error {
 	}
 
 	for {
-		have := t.w - t.r
+		at := t.r + skip
+		have := t.w - at
 		if have >= utf8.UTFMax {
 			return nil
 		}
@@ -564,16 +603,18 @@ func (t *Reader) fillRuneLocked() error {
 		// Release space at the same point a fill for a maximal rune did, so
 		// the bytes kept behind the cursor do not depend on how much input
 		// the source has delivered.
-		if t.r+utf8.UTFMax >= len(t.buf) {
+		if at+utf8.UTFMax >= len(t.buf) {
 			t.compact()
+			at = t.r + skip
 		}
 
-		if have > 0 && utf8.FullRune(t.buf[t.r:t.w]) {
+		if have > 0 && utf8.FullRune(t.buf[at:t.w]) {
 			return nil
 		}
 
-		if _, err := t.fillAtLeast(have + 1); err != nil {
-			if errors.Is(err, ErrMoreInput) && t.w-t.r > have && utf8.FullRune(t.buf[t.r:t.w]) {
+		if _, err := t.fillAtLeastAt(skip, have+1); err != nil {
+			at = t.r + skip
+			if errors.Is(err, ErrMoreInput) && t.w-at > have && utf8.FullRune(t.buf[at:t.w]) {
 				// The bytes that arrived with the signal complete the rune,
 				// so this read does not need more input.
 				return nil
@@ -581,7 +622,7 @@ func (t *Reader) fillRuneLocked() error {
 			return err
 		}
 
-		if t.w-t.r == have {
+		if t.w-(t.r+skip) == have {
 			// No byte arrived: a source error is owed after the buffered
 			// bytes, which are served first.
 			return nil
@@ -626,6 +667,7 @@ func encodedLeadLen(b byte) int {
 func (t *Reader) ReadRune() (r rune, size int, err error) {
 	t.mu.Lock()
 	defer t.mu.Unlock()
+	t.ctr.lock()
 
 	located, err := t.readRuneLocked()
 	if err != nil {
@@ -705,6 +747,7 @@ func (t *Reader) readRuneLocked() (LocatedRune, error) {
 func (t *Reader) ReadLocatedRune() (LocatedRune, error) {
 	t.mu.Lock()
 	defer t.mu.Unlock()
+	t.ctr.lock()
 
 	return t.readRuneLocked()
 }
@@ -722,6 +765,7 @@ func (t *Reader) ReadLocatedRune() (LocatedRune, error) {
 func (t *Reader) PeekRune() (LocatedRune, error) {
 	t.mu.Lock()
 	defer t.mu.Unlock()
+	t.ctr.lock()
 
 	t.lastRuneSize = -1
 
@@ -749,6 +793,7 @@ func (t *Reader) PeekRune() (LocatedRune, error) {
 func (t *Reader) UnreadRune() error {
 	t.mu.Lock()
 	defer t.mu.Unlock()
+	t.ctr.lock()
 
 	t.flushCarry()
 
@@ -777,6 +822,7 @@ func (t *Reader) UnreadRune() error {
 func (t *Reader) Read(p []byte) (n int, err error) {
 	t.mu.Lock()
 	defer t.mu.Unlock()
+	t.ctr.lock()
 
 	needed, filled := len(p), 0
 
@@ -906,6 +952,7 @@ func (t *Reader) Read(p []byte) (n int, err error) {
 func (t *Reader) Seek(offset int64, whence int) (int64, error) {
 	t.mu.Lock()
 	defer t.mu.Unlock()
+	t.ctr.lock()
 
 	current := int64(t.pos.Offset())
 	bufferStart := current - int64(t.r)
@@ -1029,6 +1076,7 @@ func (t *Reader) runeCount(b []byte) int {
 func (t *Reader) Pos() *position.Position {
 	t.mu.Lock()
 	defer t.mu.Unlock()
+	t.ctr.lock()
 
 	return t.pos.Copy()
 }
@@ -1038,6 +1086,7 @@ func (t *Reader) Pos() *position.Position {
 func (t *Reader) Cursor() Pos {
 	t.mu.Lock()
 	defer t.mu.Unlock()
+	t.ctr.lock()
 
 	return t.cursorLocked()
 }

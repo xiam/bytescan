@@ -58,9 +58,20 @@ rule's own state is the `Rule` value it returns.
 
 - **The per-token holdings.** The stack is `rulesProcessor.buf`;
   `processSymbol` pushes every symbol it is given on it, the synthetic EOF
-  symbol included. It is the only copy of the token's symbols: `nextToken`
-  keeps none of its own and slices the winning text from the stack
-  (`rulesProcessor.Symbols`) before the next `Reset`. The per-rule bookkeeping
+  symbol included. The stack keeps each symbol as a packed entry, or in
+  `rulesProcessor.wide` when the symbol does not fit in one, and
+  `rulesProcessor.at` returns every symbol unchanged
+  (`TestStackKeepsEverySymbol`). It is the only copy of the token's symbols:
+  `nextToken` keeps none of its own and copies the winning text from the stack
+  (`rulesProcessor.CopyText`) before the next `Reset`. Over a `*cursor.Reader`
+  the scanner also keeps, between two tokens, the symbols that the rules were
+  shown past the end of the committed token (`Scanner.carry`, copied from the
+  stack by `Scanner.keepCarry`) and the runes of its lean window that the rules
+  were not shown (`Scanner.leanWin`). This is input that the scanner decoded
+  and did not consume, not rule state: the next token shows it to the rules
+  again from its first symbol, and the processor state is reset as before
+  (`TestCarryIsUsed`, `TestLeanReadPathMatchesPublic`). The slice
+  `Scanner.carry` keeps its capacity across tokens. The per-rule bookkeeping
   is `ruleState.rule`, `ruleState.lastAccept`, and `ruleState.isActive`. The
   read position is the cursor together with the in-flight checkpoint that marks
   the token start (armed by `remarkSlot` at the start of `nextToken`). The
@@ -86,7 +97,7 @@ rule's own state is the `Rule` value it returns.
   across symbol steps.
 - **The stack is a model.** A pushback does not remove anything from
   `rp.buf`. The pushback loop of `processSymbol` reads
-  `rp.buf[len(rp.buf)-pushbackCount]`. So one rule's pushback cannot change
+  `rp.at(len(rp.buf) - pushbackCount)`. So one rule's pushback cannot change
   what any other rule is shown, and the stack is the same for every rule
   within a step. Evidence: `TestPushBackIsPerRule` for the isolation between
   two rules.
@@ -243,6 +254,107 @@ meaningful.
 
 ### Owner decisions
 
+- **Proposed, not decided — the table compiler.** The proposal: compile a
+  rule set built only from `rules/core` to a table of states; build form A,
+  one table for each composed rule, which keeps the five principles; decide
+  form B, one table for the whole rule set of a scanner, after a second
+  profiling pass on top of form A, because form B conflicts with
+  principle 1. The owner has not decided whether to build it, or in which
+  form. This entry takes the date of the owner's decision when the owner
+  decides, and it says then what was decided. Until then it is an
+  [Open design question](open-questions.md#question-31). The design is
+  [Table compiler](table-compiler.md).
+- **2026-11-22 — the name of the table compiler design.** The owner chose,
+  in the words "Yes, table-compiler.md", the file
+  `docs/specs/table-compiler.md` for the design. Whether to build it, and in
+  which form, stays open as [question 31](open-questions.md#question-31).
+- **2026-11-21 — the lean read path between the scanner and the cursor.**
+  The owner chose, in the words "Internal hook package", how the scanner
+  reads the cursor's buffer without one `ReadLocatedRune` per rune. A new
+  package `internal/leanread` imports only the standard library and defines
+  the interface and a hook. A normal-build file of `cursor` registers an
+  unexported adapter in `init`, as the counters hook does. No exported name
+  is added to `cursor` or to the root package. The Independence section of
+  the cursor specification and the allowed set of `TestImportIndependence`
+  allow `cursor` to import this one internal package, and nothing else. A new
+  exported method, a bulk `Read` and `//go:linkname` were not taken. Current
+  contract; see [Independence](cursor.md#independence).
+- **2026-11-20 — the outside references.** The owner approved, in the words
+  "Approve as proposed", two outside references for the baseline report: a
+  separate benchmark `BenchmarkReference/<case>/<tool>` with the tools
+  `textscanner` (`text/scanner`) and `regexp` (one anchored alternation of
+  the token classes of the case, with `Longest`); the raw files
+  `<case>-ref-<tool>.txt`; the text cases `json`, `code`, `stream` and
+  `large`, without `slip`; the 5 percent floor and the rerun rule as for the
+  lanes; and a table "Outside references" in each text case of the report,
+  with a fixed paragraph on what each tool does and does not do. The
+  references are not lanes. Current contract; see
+  [The outside references](measurement.md#the-outside-references).
+- **2026-11-20 — the names and the format of the statelex report.** The
+  owner approved, in the words "Approve as proposed", the benchmark
+  `BenchmarkEdit/<set>/<shape>/<size>` in a test file of `statelex`, its sets,
+  shapes and sizes, the metrics `removed-tokens/op`, `inserted-tokens/op`,
+  `copied-bytes/op`, `visited-tokens/op` and `relexed-bytes/op`, one lane
+  (`control`), `-test.benchtime 200ms`, the raw files
+  `<set>-<shape>-<size>-control.txt`, and one table for each set and shape
+  with one row for each size and no rate in MB/s. Current contract; see
+  [The statelex report](measurement.md#the-statelex-report).
+- **2026-11-20 — the names of the harness, and the floor of the spread.**
+  The owner made two decisions for the harness in `internal/bench`.
+  1. **The names and the formats**, in the words "Approve all": `bench.Main`,
+     `BenchmarkCase/<case>` with the test flag `-lane`, the runner flags
+     `-kind`, `-out`, `-runs` and `-cases`, the raw files
+     `<case>-<lane>.txt` with `superseded/` and one `lane:` line for each
+     run, the corpus file names, the label "no interval (∞)", and scanners
+     without `bufio` and without the per-token guard.
+  2. **The resolution floor**, in the words "5% resolution floor": the
+     reported spread of a lane is the larger of `benchstat`'s 95 percent
+     interval and 5 percent of the median. No difference under 5 percent is
+     claimed between reports. The rerun rule keeps using the interval.
+  Current contract; see
+  [The packages and the names](measurement.md#the-packages-and-the-names)
+  and [Runs, the estimator and the spread](measurement.md#runs-the-estimator-and-the-spread).
+- **2026-11-20 — the names of the meter constructors and counts.** The owner
+  approved, in the words "Approve as is",
+  `func NewReader(r io.Reader, c *Counts) *Reader`,
+  `func NewSource(src bytescan.Source, c *Counts) *Source`, and the `uint64`
+  fields `Bytes`, `Reads`, `Tokens` and `TokenBytes` of `meter.Counts`. The
+  two wrappers share one `*Counts` that the caller owns. Current contract; see
+  [The packages and the names](measurement.md#the-packages-and-the-names).
+- **2026-11-19 — the measurement method.** The owner made six decisions for
+  measuring how fast bytescan reads and lexes. All of it is built and a
+  Current contract; see [Measurement](measurement.md).
+  1. **The reference cases.** Five cases: `json`, a real document
+     (`golang_source.json` from the Go source tree, read twice); `code`, the
+     hand-written rules of `BenchmarkComplexTokens` over generated SQL-like
+     code (token-dense); `slip`, SLIP, not MPEG-TS, over a generated stream;
+     `stream`, the `streamtest` line stream of 64 MiB, generated before the
+     timer; `large`, four tokens of 1 MiB. The sizes and sources are in
+     [The reference cases](measurement.md#the-reference-cases).
+  2. **The baseline machine.** The shared runner, with the spread reported
+     next to every value.
+  3. **The build tag.** `bench`, with the file pair `counters_on.go` and
+     `counters_off.go` in each package that counts. The owner accepted the
+     risk that a program built with its own `-tags bench` also builds the
+     counters.
+  4. **The packages and the names.** Three packages under `internal/`:
+     `internal/meter` (the wrappers), `internal/counters` (the snapshot types,
+     read through functions that only the tagged files set) and
+     `internal/bench` (the harness, the corpus and the runner
+     `cmd/benchreport`), with the type and function names that
+     [The packages and the names](measurement.md#the-packages-and-the-names)
+     gives. The rate function is
+     `func Rates(c Counts, elapsed time.Duration) (Throughput, error)`, and
+     `meter.Throughput` has the `float64` fields `BytesPerSecond` and
+     `TokensPerSecond`.
+  5. **The counters.** Fourteen engine counters, eight in the scanner and six
+     in the cursor; the ratios are derived in the report, not counted. The
+     calls inside an opaque rule are measured with `pprof`.
+  6. **The report format.** Markdown in `internal-docs/benchmarks/` with the
+     raw output of every lane beside it; rates in MB/s (10^6 bytes per
+     second); 10 interleaved runs per lane; the median and its 95 percent
+     interval; a spread limit of 5 percent, one rerun with 20 runs, then
+     "inconclusive". No measured number goes into a public document.
 - **2026-11-19 — where an empty change sits.** An edit that changes no
   token, such as case A24, gives an empty change. It sits where the trim at
   the start and the trim at the end meet: `Start`, `OldEnd` and `NewEnd` are

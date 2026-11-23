@@ -4,10 +4,12 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"slices"
 	"strings"
 	"sync/atomic"
 	"testing"
 	"time"
+	"unicode/utf8"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -425,6 +427,73 @@ func TestMoreInputMaxTokenBytes(t *testing.T) {
 	assert.ErrorIs(t, err, bytescan.ErrTokenTooLarge)
 	assert.ErrorIs(t, err, cursor.ErrRetentionExceeded)
 	assert.NotErrorIs(t, err, bytescan.ErrMoreInput)
+}
+
+// TestMoreInputInsideALongToken covers the signal inside a long token. The
+// run of more than 1 Mi runes of TestLongTokenPushBackAcrossTheWholeToken
+// arrives in three parts that cut it at byte offsets inside runes, and each
+// part ends inside the open token: Next returns ErrMoreInput and the token
+// starts over on the next call. The tokens and what the pushback chains are
+// shown equal those of the whole input in one read.
+func TestMoreInputInsideALongToken(t *testing.T) {
+	run := longTokenText(longTokenRunes)
+	input := run + ";" + run
+
+	var p halfBackProbe
+	src := &feedSource{}
+	sc := bytescan.NewWithCursor(cursor.NewReader(src))
+	sc.MustAddRule("HALF", newHalfBackRule(&p))
+	sc.MustAddRule("SEMI", newLiteralRule(";"))
+
+	var lines, texts []string
+	drain := func() error {
+		for {
+			tok, err := sc.Next()
+			if err != nil {
+				require.Nil(t, tok)
+				return err
+			}
+			lines = append(lines, longTokenLine(tok))
+			texts = append(texts, tok.Text())
+		}
+	}
+
+	// Each cut is one byte past a multi-byte rune's first byte, so each part
+	// ends inside a rune.
+	cuts := []int{len(run) / 3, 2 * len(run) / 3, len(run)}
+	for i := range cuts[:2] {
+		for !utf8.RuneStart(run[cuts[i]]) || run[cuts[i]] < utf8.RuneSelf {
+			cuts[i]++
+		}
+		cuts[i]++
+	}
+	prev := 0
+	for _, cut := range cuts {
+		src.feed(run[prev:cut])
+		prev = cut
+		require.Equal(t, bytescan.ErrMoreInput, drain())
+		require.Empty(t, lines, "a token of the open run was returned")
+	}
+
+	src.feed(";" + run)
+	require.Equal(t, bytescan.ErrMoreInput, drain())
+	src.end()
+	require.Equal(t, io.EOF, drain())
+
+	half, shown := wantHalfBack([]rune(run))
+	var wantTypes, wantTexts []string
+	for i := range half {
+		wantTypes, wantTexts = append(wantTypes, "HALF"), append(wantTexts, half[i])
+	}
+	wantTypes, wantTexts = append(wantTypes, "SEMI"), append(wantTexts, ";")
+	for i := range half {
+		wantTypes, wantTexts = append(wantTypes, "HALF"), append(wantTexts, half[i])
+	}
+
+	assert.Equal(t, longTokenWant(t, input, wantTypes, wantTexts), lines)
+	assert.True(t, slices.Equal(wantTexts, texts), "token texts")
+	assert.Equal(t, 2*shown, p.shown, "symbols shown by a pushback")
+	assert.Zero(t, p.mismatches, "shown symbols that differ from the symbols read")
 }
 
 // TestMoreInputThroughSkipAndDriver checks that the signal passes through

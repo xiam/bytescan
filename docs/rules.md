@@ -60,6 +60,19 @@ Core holds the building blocks that every other rule is made of:
 - **Lookahead helper.** `PushBack`, the one way a hand-written rule builds a
   pushback chain.
 
+**An opaque rule inside a repetition.** An opaque rule is a rule that
+`rules/core` did not build, such as a hand-written rule. A core rule that you
+wrap in a function of your own is opaque too (`TestWrappedCoreRuleIsOpaque`).
+An opaque rule inside `ZeroOrMore` or `OneOrMore` can cost time that grows with
+the square of the token length. This happens when the rule can end at many
+positions, such as a hand-written run of letters. The combinators merge two
+runs of a core rule that are in the same state, but they cannot merge the runs
+of an opaque rule. Build the repeated part from `rules/core` instead, for
+example `core.RuneRun(core.ASCIIWord)`. The *Cost* entry of [Composition and
+ambiguity](specs/composition.md#composition-and-ambiguity) states this cost,
+and `TestOpaqueZeroOrMoreIsNotMerged` (`rules/core/cost_internal_test.go`)
+checks it.
+
 Core contains the only hand-written state functions under `rules/`. A rule
 belongs in core when it is a general building block that does not describe a
 token of any domain.
@@ -205,10 +218,10 @@ An import in the other direction, for example `rules/core` importing
 
 ## Long tokens and memory
 
-A scanner holds memory in proportion to its longest open token: about 10 bytes
-of live heap per input byte for ASCII input, and about 3 times that at peak
-(see the package documentation of `bytescan`). `bytescan.WithMaxTokenBytes`
-is the only hard bound on it, and it is fail-stop: a token that would exceed
+A scanner holds memory in proportion to its longest open token: the live heap
+grows linearly with the bytes of the open token, and the peak is higher while
+the stack grows (see the package documentation of `bytescan`).
+`bytescan.WithMaxTokenBytes` is the only hard bound on it, and it is fail-stop: a token that would exceed
 the bound makes `Next` return an error wrapping
 `cursor.ErrRetentionExceeded`. A scanner over a shared cursor takes the bound
 through `NewWithCursorOptions`.

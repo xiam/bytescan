@@ -65,10 +65,15 @@ bound); the compile-time assertion in `tests/cursor_test.go` that
 ### Memory held by an open token
 
 **Current contract.** A scanner holds memory in proportion to its longest open
-token. The rule stack holds one 8-byte `Symbol` per rune read for the token,
-and the cursor retains the token's input. For ASCII input that is about 10 B of
-live heap per input byte. The stack is the only copy of the symbols (see
-[principle 1](design-principles.md#principle-1-stateless-stack-model)).
+token. The rule stack holds one packed entry per rune read for the token, half
+the size of a `Symbol` (`rulesProcessor.buf`; `TestStackKeepsEverySymbol`),
+and the cursor retains the token's input. So the live heap grows linearly with
+the bytes of the open token. The stack is the only copy of the symbols of the
+open token (see
+[principle 1](design-principles.md#principle-1-stateless-stack-model)). Over a
+`*cursor.Reader` the scanner also keeps the symbols that the rules were shown
+past the end of the last committed token (`Scanner.carry`), one `Symbol` per
+rune; the slice keeps the capacity of the longest such overshoot.
 `WithMaxTokenBytes` (through `NewWithOptions`, or `NewWithCursorOptions` for a
 scanner over a shared cursor) is the only hard bound, and it is fail-stop, as
 described above; there is no default bound. A rule whose read-ahead can be
@@ -79,14 +84,12 @@ run and rejects it, a shorter token commits, and the next token reads the rest
 of the run again.
 
 **Evidence.** `TestOpenTokenLiveHeap` (live heap at the last rune of a 1 MiB
-open `base.Quoted` token is at most 12.7 B per input byte, the measured value
-plus 20%); `TestSymbolSize` (`unsafe.Sizeof(Symbol{})` is at most 8).
+open `base.Quoted` token is at most `openTokenLivePerByte` bytes per input
+byte, the measured value plus 20%); `TestSymbolSize` (`unsafe.Sizeof(Symbol{})` is at most 8).
 
-**Recorded measurement, not a contract.** With the current scanner, a
-`base.Quoted` rule on an unterminated quote measured 10.6 B of live heap per
-input byte on one open token of 1 MiB and 10.3 B on 4 MiB, with peak heap about
-32 B per byte. No committed test reproduces the 4 MiB and peak figures; only
-the 1 MiB ceiling above is pinned.
+**Not a contract.** The peak heap, while the stack grows, is higher than the
+live heap. No committed test bounds the peak; only the live-heap ceiling of
+1 MiB above is pinned.
 
 ### A longer branch without a bound
 
