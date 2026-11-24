@@ -137,19 +137,6 @@ questions 16 to 21, 23 to 26 and 28 to 30 on 2026-11-18; they are under
   re-lex grows with the size. The measurement does not choose a bound, and
   the question stays open.
 
-Question 31 comes from the design of the [table compiler](table-compiler.md).
-
-- <a name="question-31"></a>**31. A table for pure core rules** — whether
-  bytescan compiles a rule set built only from `rules/core` to a table of
-  states, and in which form: one table for each composed rule, or one table
-  for the whole rule set of a scanner. The constraint: the tokens, the
-  symbols read for each token and the errors stay those of the engine, no
-  exported name changes, and a rule that is not built only from `rules/core`
-  keeps the engine. The design, its proof of equal tokens, its cost and its
-  recommendation are in [Table compiler](table-compiler.md); the proposal is
-  in the [decision log](design-principles.md#owner-decisions), marked
-  "proposed". The owner has not decided.
-
 ## Closed
 
 These are in the [decision log](design-principles.md#closed-design-questions):
@@ -173,3 +160,4 @@ These are in the [decision log](design-principles.md#closed-design-questions):
 - **28. Reading the lexer state** — closed 2026-11-18 ([question 28](design-principles.md#question-28)).
 - **29. Errors while re-lexing** — closed 2026-11-18 ([question 29](design-principles.md#question-29)).
 - **30. Packaging, the token store and the build order** — closed 2026-11-18 ([question 30](design-principles.md#question-30)).
+- **31. A table for pure core rules** — closed 2026-11-23 ([question 31](design-principles.md#question-31)).

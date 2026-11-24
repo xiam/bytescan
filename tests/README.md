@@ -27,12 +27,14 @@ test, or change the citation in the same change.
 | Live heap of the line table on a long stream of newlines | `line_table_test.go` |
 | Context: preceding tokens, retention, failed `Next` | `context_test.go` |
 | Mark reuse and `Release` on a switch | `reuse_test.go` |
+| The token boundary on the lean read path against the public read path: retention budget, a caller's checkpoint, mode switches, `ErrMoreInput`, concurrent scanners | `token_boundary_test.go` |
 | One stack for the open token, and its live heap | `open_token_test.go` |
 | `Source`, `Skip` and `WithType` | `source_test.go` |
 | Allocations per token | `alloc_test.go` |
 | Long-running streams (soak) | `soak_test.go`, `soak_gen_test.go` |
 | Hand-written rules against Go's `regexp` | `regexp_test.go` |
 | Rules under `rules/` against Go's `regexp` (oracle tests) | `core_oracle_test.go`, `core_combinator_oracle_test.go`, `base_*_oracle_test.go`, `special_oracle_test.go`, `octet_oracle_test.go` |
+| The oracle tests again with every core rule on the engine, in the build with the tag `coreengine` | `engine_forced_test.go`, `engine_tag_on_test.go`, `engine_tag_off_test.go` |
 | Published files name no internal host | `published_files_test.go` |
 | Benchmarks | `bench_test.go`, and `BenchmarkScannerPerformance` in `scanner_buffer_test.go` |
 
@@ -63,6 +65,14 @@ and the packages under `rules/` share: a token stream as a list of
 `Unknowns`), a table runner for complete streams (`RunStreamCases`), and
 `RaceDetector`. A package binds them to short local names in its
 `helpers_test.go`.
+
+## The check of the commit
+
+`advance_check_test.go` sets `leanread.Check` of
+[`internal/leanread`](../internal/leanread) for every test of this package. The
+scanner commits a token over a `*cursor.Reader` with a position that it computes
+from the token's runes. With the check on, the cursor also computes that
+position from the token's bytes, and the token fails when the two differ.
 
 ## Where a new test goes
 

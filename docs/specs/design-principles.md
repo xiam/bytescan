@@ -254,20 +254,38 @@ meaningful.
 
 ### Owner decisions
 
-- **Proposed, not decided — the table compiler.** The proposal: compile a
-  rule set built only from `rules/core` to a table of states; build form A,
-  one table for each composed rule, which keeps the five principles; decide
-  form B, one table for the whole rule set of a scanner, after a second
-  profiling pass on top of form A, because form B conflicts with
-  principle 1. The owner has not decided whether to build it, or in which
-  form. This entry takes the date of the owner's decision when the owner
-  decides, and it says then what was decided. Until then it is an
-  [Open design question](open-questions.md#question-31). The design is
-  [Table compiler](table-compiler.md).
+- **2026-11-23 — practice 6 on classes.** The owner adopted, in the words
+  "Adopt practice 6 (Recommended)", the rule that a class gives the same
+  answer for the same rune and has no side effect. A class is a set of runes
+  given to a `rules/core` rule, including any predicate that the caller
+  supplies. The form A table of the [table compiler](table-compiler.md) may
+  ask a class about a rune once and reuse the answer on that basis. Nothing
+  checks the rule at run time. See
+  [practice 6](../rule-authoring.md#practice-6-progress-and-purity) and the
+  *Classes* item of
+  [Composition and ambiguity](composition.md#composition-and-ambiguity).
+- **2026-11-23 — the table compiler: form A, and no bypass of the VM.** The
+  owner made two decisions on the [table compiler](table-compiler.md).
+  1. **Build form A**, in the words "Yes, keep form A": a table inside
+     each pure core rule of `rules/core`. The tabled rule stays a
+     `bytescan.Rule` that the VM calls, so form A keeps the five principles.
+  2. **No form of the compiler bypasses the VM**, in the words "I don't think
+     bypassing the VM is a good architectural decision right now. [...] One
+     of the core things we are offering is that people will be able to write
+     rules as Go functions." Form B, one table for the whole rule set of a
+     scanner, is not built, and principle 1 stays as it is.
+  The owner also recorded a later direction that is not part of this
+  decision: "We might be able to precompile rules at some point by using the
+  AST package and converting rules into automations, but not right now."
+  Form A was an Intended capability while it was being built. It is built
+  now and is a Current contract; see the
+  [table compiler](table-compiler.md). Closes question 31; see
+  [Closed design questions](#closed-design-questions).
 - **2026-11-22 — the name of the table compiler design.** The owner chose,
   in the words "Yes, table-compiler.md", the file
   `docs/specs/table-compiler.md` for the design. Whether to build it, and in
-  which form, stays open as [question 31](open-questions.md#question-31).
+  which form, stayed open as question 31 until the owner decisions of
+  2026-11-23 above.
 - **2026-11-21 — the lean read path between the scanner and the cursor.**
   The owner chose, in the words "Internal hook package", how the scanner
   reads the cursor's buffer without one `ReadLocatedRune` per rune. A new
@@ -577,6 +595,14 @@ meaningful.
   reach, not visible in the API. Current contract.
   ([Scope and layers](resumable-lexing.md#scope-and-layers),
   [The lexer with state](resumable-lexing.md#the-lexer-with-state))
+
+- <a name="question-31"></a>**31. A table for pure core rules** — closed by
+  the owner decisions of 2026-11-23 above. Form A, one table for each pure
+  core rule inside `rules/core`, is built and is a Current contract; the VM
+  still calls every registered rule. No form of the compiler bypasses the
+  VM, so form B, one table for the whole rule set of a scanner, is not
+  built. Classes give the same answer for the same rune (practice 6).
+  ([Table compiler](table-compiler.md))
 
 ### Known deviations
 

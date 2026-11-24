@@ -18,7 +18,8 @@ var codeUnicodeIdentifierContinue = core.UnicodeTables(unicode.L, unicode.Nl, un
 // Identifier returns a rule for an identifier: one rune of start, then any
 // number of runes of rest: [start][rest]*. It accepts after each rune. At end
 // of input it rejects the EOF symbol, so the identifier read so far stays the
-// match. It panics if start or rest is nil.
+// match. It panics if start or rest is nil. start and rest must give the same
+// answer for the same rune and have no side effect (see core.Class).
 //
 // Identifier matches keywords too. To lex a keyword as its own token, register
 // core.Keyword(word, rest) before the identifier rule: both match the same

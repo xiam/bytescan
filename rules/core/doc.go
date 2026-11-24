@@ -36,8 +36,10 @@
 // ASCII prefix is ASCII-only (ASCIIDigit, ASCIIOctalDigit, ASCIIBinaryDigit,
 // ASCIILetter, ASCIIIdentifierStart, ASCIIWord, ASCIISpace, ...); a class with
 // the Unicode prefix uses a Unicode general category (UnicodeLetter, ...);
-// AnyRune contains every rune. RuneSet, RuneRange, UnicodeTables and
-// UnicodeScript build further classes. A class is not a rule: Rune, RuneRun
+// AnyRune contains every rune. A class gives the same answer for the same
+// rune and has no side effect, a predicate that the caller converts to a
+// Class included (practice 6 of docs/rule-authoring.md). RuneSet, RuneRange,
+// UnicodeTables and UnicodeScript build further classes. A class is not a rule: Rune, RuneRun
 // and RuneRunMax lift a class into a rule, and Repeat takes a rule, so a class
 // is repeated as Repeat(Rune(c), min, max). A run of one to n runes of a
 // class is RuneRunMax(c, n), which costs the same to build for every n.
@@ -76,8 +78,10 @@
 // composes too: the next part starts where that chain ends.
 //
 // The rules of this package carry an internal structure that combinators
-// compose, so two runs of a core part in the same state are merged and a
-// composition of core rules without lookahead stays linear in the input.
+// compose. A composition of primitives of this package with no lookahead runs
+// on a table (see Tables below). On the engine, two runs of a core part in the
+// same state are merged, so a composition of core rules without lookahead
+// stays linear in the input there too.
 // FollowedBy and NotFollowedBy start one run of their lookahead from each end
 // of their rule, and runs of different lookaheads are not merged, so a
 // lookahead that overlaps a repetition, as in
@@ -89,9 +93,82 @@
 // that grow its match. A hand-written rule that accepts "abcdefgh" therefore
 // never offers the shorter "abcd" that its own lookahead branch could have
 // matched. Overlapping repetition of an opaque part, such as ZeroOrMore of a
-// hand-written run, costs time quadratic in the token length. Each
-// combinator comment states its measured cost in leaf calls (calls to its
-// parts) per input symbol.
+// hand-written run, costs time quadratic in the token length. A composed rule
+// with a lookahead or with an opaque part keeps the engine, so these two costs
+// are costs of the engine. Each combinator comment states its measured cost on
+// the engine in leaf calls (calls to its parts) per input symbol, and says
+// when the rule runs on a table instead.
+//
+// # Tables
+//
+// A composed rule, RuneRun and RuneRunMax included, whose every part is a
+// primitive of this package, with no lookahead (FollowedBy, NotFollowedBy,
+// Keyword and the keyword sets) and no part that this package did not build
+// (AtLineStart included), runs on a table of states. The table is built the
+// first time the rule reads a symbol, so a rule that is only a part of a
+// larger rule builds none, and one table serves every scanner that runs the
+// rule. Each state of the table is one Rule value, built with the table and
+// never changed, so a step returns a prebuilt Rule value: the VM still calls
+// the rule for every symbol. A state has a full row for the runes U+0000 to
+// U+00FF, which hold ASCII text and every byte of package bytesource; a step
+// on such a rune allocates nothing. A rune above U+00FF is stepped as the
+// engine steps it, the first time that a state meets it, and each table
+// keeps such steps in a cache of a bounded size; a step that the cache keeps
+// allocates nothing either. A table makes its cache at its first rune above
+// U+00FF, small, and the cache grows with the steps that it keeps, so a
+// table that meets few such runes holds little memory for them
+// (TestTableFixedMemory). When the cache is full, a new step is computed
+// each time and is not kept, so the memory of a table stays bounded
+// (TestTableCacheBounded). A step to a set of threads that the table does not
+// have, as after the first rune of a literal of runes above U+00FF, continues
+// on the engine for the rest of the token. The table gives the tokens of the
+// engine, also at end of input, when the input arrives in parts, when a class
+// panics, and on runes above U+00FF (TestTableMatchesEngine,
+// TestTableStepsMatchEngine, TestTabledRuleReuse, TestTableCacheConcurrent).
+//
+// The build has a fixed budget of states and of work. A rule whose table would
+// be larger keeps the engine for good, with the same tokens; a rule that must
+// remember many runes, such as a Sequence of ZeroOrMore and a Repeat with a
+// large count, or a Choice of very many literals, can be over it
+// (TestTableBudgetFits, TestTableBudgetWideRules). A rule over the budget pays
+// for the build up to the budget once, at its first symbol. A composed rule
+// with a lookahead or with a part that this package did not build keeps the
+// engine too (TestTableRulesTabled). Literal, LiteralIgnoreCase, AnyLiteral,
+// AnyLiteralIgnoreCase and Rune registered alone run on their own prebuilt
+// states, and so do Keyword and the keyword sets (keywordChain,
+// keywordTable). Because the table asks a class about each rune once, when it
+// builds the table, a class must give the same answer for the same rune
+// (practice 6 of docs/rule-authoring.md).
+//
+// # Cost
+//
+// The cost of a rule depends on the path that it runs on.
+//
+//   - On a table, a step on a rune from U+0000 to U+00FF is one lookup and
+//     calls no leaf (tableState.step). A step on a rune above U+00FF is one
+//     lookup in the cache of the table when the cache keeps it. Otherwise it
+//     is one step of the engine, which the cache keeps while it has room
+//     (tableState.far, TestTableCacheBounded). A step to a set of threads
+//     that the table does not have continues on the engine for the rest of
+//     the token (tableState.farStep).
+//   - On the engine, each symbol costs the leaf calls that the combinator
+//     comments state. Those comments, and the one of RuneRunMax, state the
+//     cost of the engine: TestCombinatorCost runs each rule on the engine.
+//     A composed rule with a lookahead, a composed rule with a part that this
+//     package did not build, and a rule over the build budget always run on
+//     the engine.
+//
+// The first use of a table also costs its build. The first symbol that a
+// rule reads builds the table of that rule, and the VM shows the first symbol
+// of a token to every registered rule. So the first token that new rule
+// values meet pays for the table of each of them that runs on one. A rule over
+// the budget pays for the build up to the budget, and it then keeps the
+// engine. The build is paid once for each rule value, so a program that lexes
+// many inputs can build its rules once and reuse them. A program that lexes
+// only one short input, with rule values built for it, can take more time and
+// more allocations for the builds than the engine would take for the whole
+// input. The cold cases coldjson and coldbudget of the benchmark harness
+// measure that first use (coldCases, internal/bench/cold.go).
 //
 // # Construction
 //

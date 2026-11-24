@@ -1,15 +1,27 @@
-# Table compiler (design, not built)
+# Table compiler (form A built)
 
 Part of the [core contract](core-contract.md). Statuses follow the
 [status convention](core-contract.md#status-convention).
 
-**Status: Open design question** ([question 31](open-questions.md#question-31)).
-This page is a design that is not built. The owner has not decided whether to
-build it. The [decision log](design-principles.md#owner-decisions) holds the
-proposal, marked "proposed". Nothing on this page is available API. It
-approves no name, no signature and no data structure. The owner chose the
-name of this page on 2026-11-22; the decision log records it. A statement about what the code does today is marked
-**Current contract** and cites a test or a symbol.
+**Status: Current contract for form A; form B is not built.** On
+2026-11-23 the owner decided to build form A, in the words "Yes, keep form
+A", and to build no form that bypasses the VM, in the words "I don't think
+bypassing the VM is a good architectural decision right now." On the same
+day the owner adopted practice 6 on classes, in the words "Adopt practice 6
+(Recommended)". The [decision log](design-principles.md#owner-decisions)
+records these decisions, which close
+[question 31](design-principles.md#question-31). Form A is built: the table
+of a pure core rule, the state bound and the work bound, the fallback to the
+engine, the cache for the runes above U+00FF, and the switch that forces the
+engine in the tests (`tableRule`, `maxTableStates`, `maxTableWork`,
+`tableCache`, `engineForced`, `rules/core/table.go`). Form A adds no exported
+name. No form bypasses the VM: the VM calls every registered rule for every
+symbol, and a tabled rule stays a `bytescan.Rule`. This page approves no
+name, no signature and no data structure. The owner chose the name of this
+page on 2026-11-22; the decision log records it. A statement about what the
+code does today is marked **Current contract** and cites a test or a symbol.
+The other sections keep the design as it was proposed. Form B stays on this
+page as the design that was not taken.
 
 This page states no measured number. The shares of the time and the expected
 gain are in an internal estimate under `internal-docs/benchmarks/`, which the
@@ -34,20 +46,23 @@ release does not export.
 
 ## In short
 
-A rule built only from `rules/core` is a finite automaton. Today the engine
-runs that automaton step by step and builds its state again for every symbol.
-A **table compiler** would compute the states once and store them in a table.
-Each step would then be one lookup: the current state and the next rune give
-the next state.
+A rule built only from `rules/core` is a finite automaton. The engine runs
+that automaton step by step and builds its state again for every symbol. A
+**table compiler** computes the states once and stores them in a table. Each
+step is then one lookup: the current state and the next rune give the next
+state. **Current contract** for form A: a pure core rule runs on its table
+(`newRuleOf`, `tableState.step`; `TestTableRulesTabled`).
 
 The table gives the same tokens as the engine. The tokens have the same
 types, the same text, the same positions and the same errors, and the scanner
 reads the same symbols to decide each token. Only the speed and the
 allocations change. One condition applies: each class of the rule must give
-the same answer for the same rune, as
-[practice 6](../rule-authoring.md#practice-6-progress-and-purity) already
-asks of a rule. A rule that is not built only from `rules/core` keeps the
-engine and does not change.
+the same answer for the same rune and have no side effect, as
+[practice 6](../rule-authoring.md#practice-6-progress-and-purity) requires
+since the owner adopted it on 2026-11-23 (the *Classes* item of
+[Composition and ambiguity](composition.md#composition-and-ambiguity)).
+A rule that is not built only from `rules/core` keeps the engine and does
+not change.
 
 The design has two forms:
 
@@ -57,7 +72,8 @@ The design has two forms:
 - **Form B, one table for the scanner.** When every registered rule is pure,
   the scanner compiles all of them into one table. The table holds the token
   type and the tie-break. The VM calls no rule. This form conflicts with
-  principle 1 (see [The design principles](#the-design-principles)).
+  principle 1 (see [The design principles](#the-design-principles)). The
+  owner decided on 2026-11-23 not to build it.
 
 Form B builds on form A: its table is made of the tables of form A.
 
@@ -187,6 +203,14 @@ design handles this in two ranges:
   the step, but it does not store it. The tokens stay the same; only that
   step is slower.
 
+**Current contract** for both ranges: the full rows (`tableRunes`,
+`tableState.step`) and the cache of `tableCacheSize` steps for each table
+(`tableCache`, `tableState.far`). A step to a set of threads that the table
+does not have continues on the engine for the rest of the token
+(`tableState.farStep`). Evidence: `TestTableCacheBounded`,
+`TestTableCacheConcurrent` and the `cjk` and `emoji` sets of
+`TestTableMatchesEngine` (`rules/core/table_test.go`).
+
 ### What a state holds
 
 | Item | Form A | Form B |
@@ -203,10 +227,13 @@ so a step allocates nothing.
 
 ### When the table is built
 
-The table is built the first time the rule reads a symbol, not when the rule
-is built. A combinator that is only a part of a larger rule never reads a
-symbol by itself, so it pays nothing. The build happens once and is shared by
-every scanner that runs the rule.
+**Current contract.** The table is built the first time the rule reads a
+symbol, not when the rule is built (`tableRule.first`). A combinator that is
+only a part of a larger rule never reads a symbol by itself, so it pays
+nothing. The build happens once for each rule value and is shared by every
+scanner that runs the rule (`TestTabledRuleReuse`). The VM shows the first
+symbol of a token to every registered rule, so the first token builds the
+table of every registered pure core rule (`TestTableRulesTabled`).
 
 ## Longest match, ties, lookahead and pushback
 
@@ -249,9 +276,21 @@ for every rule that the table does not cover, and its tests stay.
   of states. A rule whose table exceeds the bound keeps the engine (form A),
   and a set whose table exceeds it falls back to form A for each rule
   (form B). The decision is made once, when the table is built.
+  **Current contract** for form A: the build stops at `maxTableStates`
+  states or at `maxTableWork` units of work, and the rule then keeps the
+  engine for good, with the same tokens (`buildTable`, `tableRule.build`).
+  Evidence: `TestTableBudgetFits`, `TestTableBudgetWideRules`,
+  `TestTableBudgetBoundsClosures`, `TestTableBudgetBoundsCounts` and the
+  "over the budget" set of `TestTableMatchesEngine`.
 - **A state of form A is also a snapshot of the engine.** So a step that the
   table cannot store can continue on the engine from the same set of threads,
-  in the middle of a token, with the same result.
+  in the middle of a token, with the same result. **Current contract**
+  (`tableState.farStep`; `TestTableStepsMatchEngine`).
+- **Current contract.** A composed rule with an opaque part or a lookahead
+  has a program that needs a log, so it runs on the engine and builds no
+  table (`program.needsLog`, `newRuleOf`). Evidence: the "fallback" set of
+  `TestTableRulesTabled`, whose `Sequence` with a hand-written part,
+  `FollowedBy` and `NotFollowedBy` build no table.
 
 A first version of form B covers a set only when every rule is pure. A mixed
 set could run one table for its pure rules next to the VM for the others,
@@ -274,7 +313,9 @@ No exported name is added, removed or changed.
   calling the rule with a probe symbol (`nodeOf`, `rules/core/handshake.go`),
   so a bridge would need another way to recognize a core rule.
 - **Tests** need a way to force the engine, so that both paths stay tested.
-  That is a switch inside the module, not an exported option.
+  That is a switch inside the module, not an exported option. **Current
+  contract:** the switch is `engineForced`, which the build tag `coreengine`
+  sets (`rules/core/engine_tag_on.go`).
 
 ## What changes in the tokens
 
@@ -311,8 +352,9 @@ running on it.
   `WithMaxTokenBytes`, which `Scanner.nextToken` checks, not the rules
   (`TestScannerMaxTokenBytes` in `tests/cursor_test.go`).
 
-What the table must do to keep these is the proof below, not evidence that
-exists today.
+What the table must do to keep these is the proof below. For form A, the
+tests of that proof exist and pass (see
+[The proof of equal tokens](#the-proof-of-equal-tokens)).
 
 **Changes:**
 
@@ -321,9 +363,9 @@ exists today.
   class that counts its calls sees fewer calls.
 - **A class that does not give the same answer for the same rune.** The
   table keeps the first answer. Such a class can give other tokens with the
-  table than with the engine. Practice 6 already says that a rule that
-  depends on anything other than its symbols gives a different token stream;
-  the table makes this true for its classes too.
+  table than with the engine. Practice 6 requires that a class give the same
+  answer for the same rune, so the tokens of such a class are not specified
+  ([Composition and ambiguity](composition.md#composition-and-ambiguity)).
 - **A class that panics.** The engine retires the composed rule for the
   token when a class panics (principle 3). The table records a panic for a
   rune as a step to the dead state, so the tokens are the same. The panic can
@@ -337,8 +379,12 @@ exists today.
 - **The leaf calls of a combinator.** The "Cost" paragraph of each combinator
   states its leaf calls per symbol, pinned by `TestCombinatorCost`
   ([Composition and ambiguity](composition.md#composition-and-ambiguity)).
-  On the table path, a step makes no leaf call. Those statements would
-  describe the engine path only.
+  On the table path, a step on a rune up to U+00FF, or on a rune whose step
+  the cache keeps, makes no leaf call; a cache miss is one step of the engine
+  (`tableState.step`, `tableState.far`). **Current contract:** those
+  statements describe the engine path, and each "Cost" paragraph says so
+  (`TestCombinatorCost` runs each rule on the engine; the *Cost* item of
+  [Composition and ambiguity](composition.md#composition-and-ambiguity)).
 - **The time, the allocations and the bytes allocated.**
 
 ## The design principles
@@ -350,15 +396,16 @@ exists today.
   concurrently, and one rule can serve several scanners
   (`TestCombinatorReuse`, `TestCombinatorRetainedAncestor`,
   `TestCombinatorSharedRule`).
-- **Form B: Conflict with principle 1**, until the owner resolves it. The
+- **Form B: Conflict with principle 1.** The
   table state stands for the state of every registered rule, and the VM holds
   it. Principle 1 says that the VM keeps no state on a rule's behalf, and the
   decision log closed the option of a VM that holds a composed rule's state
   ([question 9](design-principles.md#question-9)). Form B would reset its
   state before each token, as the VM does today, so nothing would carry over
   from one token to the next. But the state would be the VM's, not the
-  rules'. The owner can resolve the conflict in one of two ways: amend
-  principle 1 for pure core sets, or build only form A.
+  rules'. The owner could resolve the conflict in one of two ways: amend
+  principle 1 for pure core sets, or build only form A. On 2026-11-23 the
+  owner chose to build only form A, so principle 1 stays as it is.
 - **Principles 2 to 5.** Both forms keep them. A pure core rule returns no
   bad verdict, so the checks of principle 2 have nothing to catch on the
   table path. A panic of a class retires the rule for the token (principle
@@ -368,7 +415,13 @@ exists today.
 ## The proof of equal tokens
 
 The table is correct only if it gives the tokens of the engine. Three kinds
-of test would prove it.
+of test prove it. **Current contract** for form A: the three kinds below
+exist. `TestOraclesWithEngineForced` (`tests/engine_forced_test.go`) runs
+the oracle tests and `TestReferencesLex` again in the build with the tag
+`coreengine`. The differential test is `TestTableMatchesEngine`, with
+`TestTableStepsMatchEngine`, `TestTabledRuleReuse`, `TestTableRulesTabled`
+and the fuzz target `FuzzTableMatchesEngine` (`rules/core/table_test.go`).
+The items below keep the design as it was proposed.
 
 1. **The oracle tests of `tests/`.** They register one rule on a scanner and
    compare its tokens with Go's `regexp`. With the table on, every pure core
@@ -407,7 +460,8 @@ of test would prove it.
 The existing tests of `rules/core` and of the root package stay as they are.
 The allocation ceilings of `tests/alloc_test.go` and of
 `TestEngineAllocationsPerToken` are lowered where the table lowers the
-allocations. The names of new tests are proposals.
+allocations. The owner approved the names of the new tests on 2026-11-23, in
+the words "Approve all (Recommended)".
 
 ## The expected gain
 
@@ -443,8 +497,9 @@ cheaper. In outline:
   the engine must keep equal. Higher for form B: its processor also meets the
   end of input, `ErrMoreInput`, the per-token bound and the lookahead record.
   The differential test is the guard in both cases.
-- **The risk to the rule contract.** Both forms make practice 6 a
-  requirement on classes, not only on rules. Both change the meaning of the
+- **The risk to the rule contract.** Both forms rely on practice 6 as a
+  requirement on classes, not only on rules; the owner adopted that
+  requirement on 2026-11-23. Both change the meaning of the
   cost statements of the combinators. Form B changes principle 1 and the
   engine counters.
 - **State explosion.** A table of sets of threads can grow fast. A `Repeat`
@@ -462,9 +517,24 @@ cheaper. In outline:
 - **The build cost.** The first symbol that a rule reads pays for the build
   of its table (form A), and the first token of a scanner pays for the table
   of its set (form B). A program that lexes only a short text could be slower
-  in total.
+  in total. **Current contract** for form A: the build is paid once for each
+  rule value, at its first symbol (`tableRule.first`). A rule over a bound
+  pays for the build up to the bound before it keeps the engine. For a
+  program that lexes one short input with new rule values, the builds can
+  cost more than the engine would cost on the whole input. The cold cases
+  `coldjson` and `coldbudget` of the benchmark harness measure that first
+  use (`coldCases`, `internal/bench/cold.go`). Their numbers are in the
+  comparison reports under `internal-docs/benchmarks/compare/`, which the
+  release does not export.
 
 ## The recommendation
+
+**Superseded on 2026-11-23.** This section is the recommendation that the
+owner decided on. The owner decided to build form A and no form that
+bypasses the VM, so form B is not built, and no later decision on form B
+is pending
+([What the owner decides](#what-the-owner-decides)). The section stays as
+the record of the proposal.
 
 The three options of the ticket, with one reason each:
 
@@ -478,17 +548,27 @@ The three options of the ticket, with one reason each:
 - **Do not build it.** The engine is correct, and a table is a second path
   that every later change of the engine must keep equal.
 
-**The recommendation: build form A now; decide form B after a second
-profiling pass on top of form A.** Form A takes most of the gain, has no
-public API and keeps the principles. Form B needs an owner decision on
-principle 1 and on the counters, and its extra gain is best measured once
-form A is in.
+**The recommendation, as proposed: build form A now; decide form B after a
+second profiling pass on top of form A.** Form A takes most of the gain, has
+no public API and keeps the principles. Form B needed an owner decision on
+principle 1 and on the counters. The owner took the first half of the
+recommendation and closed the second: form A is built, and form B is not
+built.
 
 ## What the owner decides
 
-- Whether to build the table, and which form: A, B, or A then B.
-- Whether practice 6 becomes an explicit requirement on classes: a class
-  gives the same answer for the same rune and has no side effect.
-- For form B: whether principle 1 is amended for pure core sets, and which
-  counters replace `RuleCalls`, `Pushbacks` and `MaxLive` on the table path.
-- The names of the new tests and of any internal package.
+Decided on 2026-11-23 ([decision log](design-principles.md#owner-decisions)):
+
+- Whether to build the table, and which form: build form A ("Yes, keep
+  form A"); no form bypasses the VM, so form B is not built.
+- Whether practice 6 becomes an explicit requirement on classes: it does
+  ("Adopt practice 6 (Recommended)"). A class gives the same answer for the
+  same rune and has no side effect.
+- For form B: whether principle 1 is amended for pure core sets. It is not,
+  because form B is not built, and no counter replaces `RuleCalls`,
+  `Pushbacks` and `MaxLive`.
+
+Decided on 2026-11-23, after form A was built:
+
+- The names of the new tests and the internal names of form A, in the words
+  "Approve all (Recommended)".

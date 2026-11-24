@@ -154,10 +154,52 @@ of 2026-11-13 ([decision log](design-principles.md#owner-decisions)).
   VM that holds a composed rule's state is closed (question 9 in the
   [decision log](design-principles.md#question-9)). Evidence:
   `TestCombinatorReuse`.
-- *Cost.* Each combinator's doc comment states its leaf calls per input
-  symbol, pinned by `TestCombinatorCost`. Runs of core parts in the same
-  state are merged; runs of opaque parts are not, and neither are the runs
-  of a lookahead from different ends of its rule. So overlapping repetition
-  of a hand-written rule, and a lookahead that overlaps a repetition, cost
-  time quadratic in the token length. Evidence: `TestOpaqueZeroOrMoreIsNotMerged`,
-  `TestLookaheadIsNotMerged`.
+- *Classes.* A class that a rule of `rules/core` or `rules/base` takes, a
+  `core.Class` and any predicate that the caller converts to one, gives the
+  same answer for the same rune and has no side effect. The same holds for a
+  class that `Not`, `Or` or `And` builds. This is a requirement on the
+  caller, adopted by the owner on 2026-11-23 in the words "Adopt practice 6
+  (Recommended)" ([practice 6](../rule-authoring.md#practice-6-progress-and-purity)).
+  Nothing checks it at run time. The tokens of a rule whose class breaks it
+  are not specified: `rules/core` may ask a class about a rune once and reuse
+  the answer, as the form A table of the
+  [table compiler](table-compiler.md) does. **Current contract, no test
+  yet:** on the engine, a class leaf asks its class at each symbol
+  (`classMatcher.step`, `rules/core/node.go`). A table asks it about each rune
+  from U+0000 to U+00FF when it builds its rows (`tableBuilder.row`), and
+  about a rune above U+00FF when it steps that rune for its cache
+  (`tableState.farStep`, `rules/core/table.go`).
+- *Cost.* A composed rule runs on one of two paths, and its cost depends on
+  the path.
+  - *The table.* A pure core rule, whose parts are all primitives of
+    `rules/core` with no lookahead and no opaque part, runs on a table. The
+    table is built at the first symbol that the rule reads
+    (`tableRule.first`), and the VM shows that first symbol to every
+    registered rule (`TestTableRulesTabled`). After the build, a step on a
+    rune from U+0000 to U+00FF is one lookup and calls no leaf
+    (`tableState.step`). A step on a rune above U+00FF is one lookup in a
+    cache of bounded size, or one step of the engine, which the cache keeps
+    while it has room (`tableState.far`, `TestTableCacheBounded`). A step to
+    a set of threads that the table does not have continues on the engine
+    for the rest of the token (`tableState.farStep`). The table gives the
+    tokens of the engine (`TestTableMatchesEngine`).
+  - *The engine.* A composed rule with an opaque part or a lookahead runs
+    on the engine (`TestTableRulesTabled`). So does a pure core rule whose table is
+    over the state bound or the work bound (`maxTableStates`,
+    `maxTableWork`); it keeps the engine for good, with the same tokens
+    (`TestTableBudgetFits`, `TestTableBudgetBoundsCounts`). Each
+    combinator's doc comment states its leaf calls per input symbol on the
+    engine, pinned by `TestCombinatorCost`, which runs each rule on the
+    engine. On the engine, runs of core parts in the same state are merged.
+    Runs of opaque parts are not merged, and neither are the runs of a
+    lookahead from different ends of its rule. So overlapping repetition of
+    a hand-written rule, and a lookahead that overlaps a repetition, cost
+    time quadratic in the token length. Evidence:
+    `TestOpaqueZeroOrMoreIsNotMerged`, `TestLookaheadIsNotMerged`.
+  - *The first use.* The build of a table is paid once for each rule value,
+    at its first symbol. A rule over a bound pays for the build up to the
+    bound before it keeps the engine. For a program that lexes one short
+    input with new rule values, the builds can cost more than the engine
+    would cost on the whole input. The cold cases `coldjson` and
+    `coldbudget` of the benchmark harness measure that first use
+    (`coldCases`, `internal/bench/cold.go`).

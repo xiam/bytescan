@@ -36,7 +36,8 @@ import (
 // decide. At end of input it ends with the run read so far; an escape rune
 // at end of input is not part of the run. It panics if stop is nil, if escape
 // is not a valid rune, or if an opener is not valid UTF-8, has fewer than two
-// runes, or starts with escape.
+// runes, or starts with escape. stop must give the same answer for the same
+// rune and have no side effect (see core.Class).
 func EscapedRun(stop core.Class, escape rune, openers ...string) bytescan.Rule {
 	if stop == nil {
 		panic("base.EscapedRun: nil stop class")
@@ -104,7 +105,8 @@ func EscapedRun(stop core.Class, escape rune, openers ...string) bytescan.Rule {
 // an escape sequence, and ends with the longest string read so far. At end
 // of input inside the string, or at a rune that is neither plain nor the
 // start of an escape sequence, it matches nothing. It panics if quote is not
-// a valid rune, if plain is nil or if escape is nil.
+// a valid rune, if plain is nil or if escape is nil. plain must give the same
+// answer for the same rune and have no side effect (see core.Class).
 func QuotedWith(quote rune, plain core.Class, escape bytescan.Rule) bytescan.Rule {
 	mustCodeRune("QuotedWith", "quote", quote)
 	if plain == nil {

@@ -88,12 +88,41 @@ const (
 // in the default run, with 12 to 16% headroom: mixed tiers 13.38, mode
 // driver 2.50, byte stream 2.69. They are asserted only without the race
 // detector: sync.Pool drops items under -race, so the counts differ there
-// (14.8, 2.5 and 2.7) and are only logged.
+// (14.8, 2.5 and 2.7) and are only logged. These are the budgets of the
+// build with the tag coreengine, in which every core rule runs on the
+// engine.
 const (
-	soakMixedAllocBudget = 15.1
-	soakModeAllocBudget  = 2.9
-	soakByteAllocBudget  = 3.1
+	soakMixedEngineAllocBudget = 15.1
+	soakModeEngineAllocBudget  = 2.9
+	soakByteEngineAllocBudget  = 3.1
 )
+
+// Allocation budgets of the normal build, in which a pure core rule runs on
+// its table and a step allocates nothing, measured on 2026-11-23 with
+// go1.25.4, without the race detector, in the default run, with 12 to 17%
+// headroom: mixed tiers 8.43 (8.53 before the cache of the steps above
+// U+00FF), mode driver 1.03, byte stream 1.35.
+const (
+	soakMixedTableAllocBudget = 9.5
+	soakModeTableAllocBudget  = 1.2
+	soakByteTableAllocBudget  = 1.55
+)
+
+// The budgets of this build.
+var (
+	soakMixedAllocBudget = soakBudget(soakMixedTableAllocBudget, soakMixedEngineAllocBudget)
+	soakModeAllocBudget  = soakBudget(soakModeTableAllocBudget, soakModeEngineAllocBudget)
+	soakByteAllocBudget  = soakBudget(soakByteTableAllocBudget, soakByteEngineAllocBudget)
+)
+
+// soakBudget returns the budget table of the normal build, or engine in the
+// build with the tag coreengine.
+func soakBudget(table, engine float64) float64 {
+	if coreEngineTag {
+		return engine
+	}
+	return table
+}
 
 // soakCheck names one check of the soak harness.
 type soakCheck int

@@ -149,20 +149,29 @@ func TestLeanPeekMatchesReadLocatedRune(t *testing.T) {
 			for _, batch := range []int{1, 3, 16} {
 				name := fmt.Sprintf("%s/%d/batch%d", src.name, i, batch)
 				t.Run(name, func(t *testing.T) {
-					leanTwin(t, src.make(text), src.make(text), batch, int64(i*31+batch))
+					leanTwin(t, src.make(text), src.make(text), batch, int64(i*31+batch), false)
 				})
 			}
 		}
 	}
 }
 
-func leanTwin(t *testing.T, a, b *Reader, batch int, seed int64) {
+// leanTwin runs the twin readers of TestLeanPeekMatchesReadLocatedRune. With
+// advance set, the lean reader ends a token with leanread.Advancer.Advance and
+// the extent of the runes it peeked, as the scanner does, instead of a Seek,
+// unless a Peek of the token reported Partial.
+func leanTwin(t *testing.T, a, b *Reader, batch int, seed int64, advance bool) {
 	t.Helper()
 
 	lean, ok := leanread.Of(a)
 	if !ok {
 		t.Fatal("leanread.Of(*Reader) reports no lean read path")
 	}
+	advancer, ok := lean.(leanread.Advancer[Pos])
+	if !ok {
+		t.Fatal("the lean read path of *Reader has no Advance")
+	}
+	var peeked []rune
 
 	rng := rand.New(rand.NewSource(seed))
 	dst := make([]leanread.Rune, batch)
@@ -183,6 +192,20 @@ func leanTwin(t *testing.T, a, b *Reader, batch int, seed int64) {
 		moves := []int{skip}
 		if partial {
 			moves = sizes
+		}
+		if advance && !partial {
+			moves = nil
+			got, err := advancer.Advance(skip, extentOf(peeked))
+			if skip == 0 {
+				// A move of no byte is a Seek that does nothing.
+				if err != nil || got != b.Cursor() {
+					t.Fatalf("Advance(0) = %+v, %v; want %+v", got, err, b.Cursor())
+				}
+			} else if err != nil {
+				t.Fatalf("lean Advance(%d): %v", skip, err)
+			} else if want := b.Cursor(); got != want {
+				t.Fatalf("Advance(%d) returned %+v, public cursor %+v", skip, got, want)
+			}
 		}
 		for _, m := range moves {
 			if m == 0 {
@@ -219,7 +242,7 @@ func leanTwin(t *testing.T, a, b *Reader, batch int, seed int64) {
 		if err := b.Remark(cb); err != nil {
 			t.Fatal(err)
 		}
-		skip, runes, sizes, partial = 0, 0, sizes[:0], false
+		skip, runes, sizes, partial, peeked = 0, 0, sizes[:0], false, peeked[:0]
 	}
 
 	// reset replays the token on both readers from its checkpoint.
@@ -234,7 +257,7 @@ func leanTwin(t *testing.T, a, b *Reader, batch int, seed int64) {
 		if got, want := a.Cursor(), b.Cursor(); got != want {
 			t.Fatalf("after the reset: lean cursor %+v, public cursor %+v", got, want)
 		}
-		skip, runes, sizes, partial = 0, 0, sizes[:0], false
+		skip, runes, sizes, partial, peeked = 0, 0, sizes[:0], false, peeked[:0]
 	}
 
 	for steps := 0; steps < 10000; steps++ {
@@ -297,6 +320,7 @@ func leanTwin(t *testing.T, a, b *Reader, batch int, seed int64) {
 			}
 			skip += dst[k].Size
 			sizes = append(sizes, dst[k].Size)
+			peeked = append(peeked, dst[k].Rune)
 			runes++
 		}
 

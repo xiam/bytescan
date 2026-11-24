@@ -44,10 +44,12 @@ rules follows the standard in the same way.
 `core.OneOrMore` from `rules/core`, not by hand. A hand-written rule, or a core
 rule wrapped in a function of your own, is an opaque rule: `rules/core` did
 not build it, and it composes as an opaque part
-(`TestWrappedCoreRuleIsOpaque`). An opaque rule inside a repetition can cost
-time that grows with the square of the token length. This happens when the
-rule can end at many positions, such as a hand-written run of letters. The
-combinators cannot merge the repeated runs of an opaque rule. The *Cost* entry
+(`TestWrappedCoreRuleIsOpaque`). A composed rule with an opaque part keeps
+the engine and runs on no table (`TestTableRulesTabled`). An opaque rule inside
+a repetition can cost time that grows with the square of the token length.
+This happens when the rule can end at many positions, such as a hand-written
+run of letters. The combinators cannot merge the repeated runs of an opaque
+rule. The *Cost* entry
 of [Composition and ambiguity](specs/composition.md#composition-and-ambiguity)
 states this cost, and `TestOpaqueZeroOrMoreIsNotMerged`
 (`rules/core/cost_internal_test.go`) checks it.
@@ -464,13 +466,30 @@ callbacks by hand.
 A constructor may panic on an invalid argument, for example an empty literal,
 because that panic happens at construction time, not while the VM runs.
 
+**Classes.** A class is a set of runes that a rule of `rules/core` or
+`rules/base` takes: a `core.Class`, including a predicate that you write and
+convert to a class, such as `core.Class(isASCIIVowel)`. A class:
+
+- gives the same answer every time it is asked about the same rune;
+- performs no side effect: it writes no variable, performs no I/O, and does
+  not call `t.Fatal`.
+
+The same holds for a class that `Not`, `Or` or `And` builds from your
+classes. The owner adopted this requirement on 2026-11-23, in the words
+"Adopt practice 6 (Recommended)". The
+[composition contract](specs/composition.md#composition-and-ambiguity) states
+it for the rules of `rules/core` and `rules/base`.
+
 **Rationale.** The VM contains a rule that breaks these points
 ([Custom-rule responsibilities](specs/rule-vm-contract.md#custom-rule-responsibilities)),
 but the rule then loses its intended match. A rule that does not settle makes
 every token read to the end of input. A side effect is permanent: the VM calls
 losing candidates too, and it does not roll back their effects. A rule that
 depends on anything other than its symbols gives a different token stream for
-the same input.
+the same input. A class has the same duty for one more reason: `rules/core`
+may ask a class about a rune once and reuse the answer, so a class cannot
+count on being asked at each symbol. A class that changes its answer, or
+counts its calls, can then give other tokens.
 
 **Example.** `newLiteralRule`, a hand-written `core.Literal`, rejects an empty
 literal at construction time and consumes one rune per state:
@@ -675,7 +694,9 @@ lines.
       acceptance. No chain ends in `StateContinue` or in a non-nil `next`
       with `StateAccept`.
 - [ ] **6. Progress and purity.** No empty match, settles by the end of input,
-      no panic, no side effect, depends only on its symbols.
+      no panic, no side effect, depends only on its symbols. Every class that
+      the rule gives to `rules/core` or `rules/base` gives the same answer for
+      the same rune and has no side effect.
 - [ ] **7. Documentation.** The constructor comment gives the regular
       expression (or a prose definition) and the behaviour at end of input.
 - [ ] **8. Naming.** `newXxxRule`, `isXxx`, `lexTypeXxx` for hand-written

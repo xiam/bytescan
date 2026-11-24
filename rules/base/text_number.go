@@ -24,7 +24,8 @@ type textNumberForm struct {
 // TextDigits(core.RuneRange('٠', '٩')), TextNumber('٬', '٫', ...) reads the
 // Arabic-Indic "١٬٢٣٤٫٥". The class replaces the ASCII digits, so a number in
 // either set of digits takes core.ASCIIDigit.Or(...). It panics if digit is
-// nil.
+// nil. digit must give the same answer for the same rune and have no side
+// effect (see core.Class).
 func TextDigits(digit core.Class) TextNumberOption {
 	if digit == nil {
 		panic("base.TextDigits: nil class")

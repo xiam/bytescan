@@ -91,6 +91,8 @@ func Symbol() bytescan.Rule {
 // example, the prolonged sound mark "ー" (U+30FC) is in the Common script,
 // and ScriptRun("Katakana", core.RuneSet("ー")) keeps it inside "コーヒー",
 // while "ー" alone is not a run. ScriptRun panics if a class of extra is nil.
+// Each class of extra must give the same answer for the same rune and have
+// no side effect (see core.Class).
 func ScriptRun(script string, extra ...core.Class) bytescan.Rule {
 	scriptClass := core.UnicodeScript(script)
 	rest := scriptClass.Or(core.UnicodeMark)

@@ -48,30 +48,35 @@ type engineShape struct {
 	rules  func(lx *bytescan.Scanner)
 
 	// ceiling is the most allocations per token that the shape may cost in a
-	// build without the race detector.
-	ceiling float64
+	// build without the race detector, with the engine forced, and
+	// tableCeiling the most with the table of a pure core rule.
+	ceiling, tableCeiling float64
 }
 
 // engineShapes are the shapes S3, S4 and S5 of that study. Their ceilings
 // are about 15% above the values measured with the current engine (S3 2.50,
-// S4 2.00, S5 2.50 allocations per token, the Token included).
+// S4 2.00, S5 2.50 allocations per token, the Token included). On the table
+// of a pure core rule (table.go), which every rule of these shapes is, a
+// step allocates nothing, so each shape costs the Token only: 1.00
+// allocations per token, measured on 2026-11-23 with go1.25.4, and a table
+// ceiling of 1.15.
 var engineShapes = []engineShape{
 	{
-		name: "S3 core.RuneRun", cycle: "ab ", tokens: 2, ceiling: 2.9,
+		name: "S3 core.RuneRun", cycle: "ab ", tokens: 2, ceiling: 2.9, tableCeiling: 1.15,
 		rules: func(lx *bytescan.Scanner) {
 			lx.MustAddRule("WORD", core.RuneRun(core.ASCIILetter))
 			lx.MustAddRule("SPACE", core.RuneRun(core.RuneSet(" ")))
 		},
 	},
 	{
-		name: "S4 base.ASCIIIdentifier", cycle: "ab ", tokens: 2, ceiling: 2.3,
+		name: "S4 base.ASCIIIdentifier", cycle: "ab ", tokens: 2, ceiling: 2.3, tableCeiling: 1.15,
 		rules: func(lx *bytescan.Scanner) {
 			lx.MustAddRule("WORD", base.ASCIIIdentifier())
 			lx.MustAddRule("SPACE", handSpace)
 		},
 	},
 	{
-		name: "S5 base.Quoted", cycle: `"ab" `, tokens: 2, ceiling: 2.9,
+		name: "S5 base.Quoted", cycle: `"ab" `, tokens: 2, ceiling: 2.9, tableCeiling: 1.15,
 		rules: func(lx *bytescan.Scanner) {
 			lx.MustAddRule("STRING", base.Quoted('"', '\\'))
 			lx.MustAddRule("SPACE", handSpace)
@@ -117,7 +122,11 @@ func TestEngineAllocationsPerToken(t *testing.T) {
 			if raceDetector {
 				return
 			}
-			assert.LessOrEqual(t, got, shape.ceiling, "allocations per token")
+			ceiling := shape.tableCeiling
+			if core.EngineForced() {
+				ceiling = shape.ceiling
+			}
+			assert.LessOrEqual(t, got, ceiling, "allocations per token")
 		})
 	}
 }

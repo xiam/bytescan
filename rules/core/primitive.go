@@ -247,7 +247,8 @@ func literalsAt(candidates [][]rune, i int, fold bool) bytescan.Rule {
 
 // Rune returns a rule for one rune of c: [c]. It accepts that rune and stops.
 // It has one scanning state, so at end of input it only sees the empty input,
-// and it rejects the EOF symbol. It panics if c is nil.
+// and it rejects the EOF symbol. It panics if c is nil. c must give the same
+// answer for the same rune and have no side effect (see Class).
 func Rune(c Class) bytescan.Rule {
 	mustClass("Rune", c)
 	return newPrimitive(oneRune(c), leafNode(classMatcher{c: c, min: 1, max: 1}))
@@ -268,7 +269,8 @@ func oneRune(c Class) bytescan.Rule {
 
 // RuneRun returns a rule for a run of runes of c: [c]+. It is the shorthand
 // OneOrMore(Rune(c)), with the same token streams and cost. It panics if c is
-// nil.
+// nil. c must give the same answer for the same rune and have no side effect
+// (see Class).
 func RuneRun(c Class) bytescan.Rule {
 	mustClass("RuneRun", c)
 	return OneOrMore(Rune(c))
@@ -279,7 +281,8 @@ func RuneRun(c Class) bytescan.Rule {
 // as several matches in a row, each of at most n runes. That bounds the
 // token of a stream that never ends a run. At end of input it rejects the
 // EOF symbol, so the run read so far stays the match. It panics if c is nil
-// or n is below 1.
+// or n is below 1. c must give the same answer for the same rune and have no
+// side effect (see Class).
 //
 // RuneRunMax(c, n) matches what Repeat(Rune(c), 1, n) matches, but it counts
 // the runes in one state instead of holding one copy of Rune(c) per count. Its
@@ -301,7 +304,8 @@ func RuneRunMax(c Class, n int) bytescan.Rule {
 // and accepts s, or it rejects when that symbol is in c. At end of input
 // before the end of s it rejects the EOF symbol, so it matches nothing; at end
 // of input after s it excludes the EOF symbol and accepts s. It panics if s is
-// empty or c is nil.
+// empty or c is nil. c must give the same answer for the same rune and have
+// no side effect (see Class).
 func Keyword(s string, c Class) bytescan.Rule {
 	if s == "" {
 		panic("core.Keyword: s must not be empty")
