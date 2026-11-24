@@ -65,6 +65,61 @@ type Reader interface {
 	Epoch() uint64
 }
 
+// Extent is what the caller of Advance knows of the bytes it moves the cursor
+// over, from the runes that Peek decoded from them: the number of runes, the
+// number of newlines, and the number of runes after the last newline.
+type Extent struct {
+	Runes int
+	Lines int
+	// Column is the number of runes after the last newline. It is used only
+	// when Lines is not zero.
+	Column int
+}
+
+// Advancer is the commit operation of the read path of a cursor whose
+// positions are of type P. The scanner asserts it on the Reader that Of
+// returns, with P the position type of package cursor, so this package does
+// not name that type.
+type Advancer[P any] interface {
+	// Advance moves the logical cursor forward over the next n bytes, which
+	// Peek decoded, and returns the position of the cursor after the move.
+	// ext describes the n bytes, and no rune that Peek returned for them was
+	// Partial. Advance takes the rune offset, the line and the column of the
+	// new position from ext instead of decoding the bytes again for them.
+	//
+	// Advance leaves the cursor as Seek(n, io.SeekCurrent) would leave it,
+	// and it fails as that Seek would, without moving the cursor. When Check
+	// is set, it also computes the new position from the bytes, as that Seek
+	// does, and fails when ext gives another one; the cursor is then not in a
+	// defined state, and the test that set Check fails.
+	Advance(n int, ext Extent) (P, error)
+}
+
+// Boundary is the work of the read path of a cursor at the boundary between
+// two tokens, with the cursor's positions of type P and its marks of type M.
+// The scanner asserts it on the Reader that Of returns, with P and M the
+// position and checkpoint types of package cursor, so this package does not
+// name those types. Each method holds the cursor's lock once.
+type Boundary[P, M any] interface {
+	// Mark re-arms the released mark m at the logical cursor, as the
+	// cursor's Remark does, and returns the position it marked. It fails as
+	// that Remark fails, and m is then unchanged.
+	Mark(m M) (P, error)
+
+	// AdvanceRelease moves the logical cursor as Advance does, and then
+	// releases old as the mark's Release does, under the same lock. It
+	// fails as Advance fails, without moving the cursor and without
+	// releasing old. A nil old, or one that is not active on this cursor, is
+	// not released, and that is not an error: unlike the mark's Release, it
+	// leaves a mark that is active on another cursor active.
+	AdvanceRelease(n int, ext Extent, old M) (P, error)
+}
+
+// Check makes Advance and AdvanceRelease compare the position that their
+// caller's Extent gives with the position that the cursor computes from the
+// bytes. Tests set it before they start; it is false in a program.
+var Check bool
+
 // Hook returns the read path of v, a cursor of this module. Package cursor
 // sets it in its init function. It is nil when package cursor is not linked.
 var Hook func(v any) (Reader, bool)

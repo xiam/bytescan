@@ -60,15 +60,36 @@ Core holds the building blocks that every other rule is made of:
 - **Lookahead helper.** `PushBack`, the one way a hand-written rule builds a
   pushback chain.
 
+**What a core rule costs.** A rule built only from the primitives of core,
+with no lookahead and no opaque part, runs on a table of states. After the
+table is built, each step on a rune up to U+00FF is one lookup. Runes above
+U+00FF go through a cache of bounded size. A composed rule with a lookahead
+(`FollowedBy`, `NotFollowedBy`, or `Keyword` and the keyword sets as a part)
+or with an opaque part runs on the engine, which steps the parts of the rule
+for each symbol. A rule whose table would be too large also keeps the engine,
+with the same tokens. The *Cost* entry of [Composition and
+ambiguity](specs/composition.md#composition-and-ambiguity) gives the details
+and the tests.
+
+**The first token pays for the tables.** A rule builds its table the first
+time it reads a symbol, and the scanner shows the first symbol of a token to
+every registered rule. So the first token with new rule values pays for the
+tables of all of them that run on a table. Build your rules once and reuse
+them for every input: one table serves every scanner that runs the rule. For a
+program that lexes only one short input, with rules built for it, the builds
+can cost more than the whole input would cost on the engine.
+
 **An opaque rule inside a repetition.** An opaque rule is a rule that
 `rules/core` did not build, such as a hand-written rule. A core rule that you
 wrap in a function of your own is opaque too (`TestWrappedCoreRuleIsOpaque`).
-An opaque rule inside `ZeroOrMore` or `OneOrMore` can cost time that grows with
-the square of the token length. This happens when the rule can end at many
-positions, such as a hand-written run of letters. The combinators merge two
-runs of a core rule that are in the same state, but they cannot merge the runs
-of an opaque rule. Build the repeated part from `rules/core` instead, for
-example `core.RuneRun(core.ASCIIWord)`. The *Cost* entry of [Composition and
+A composed rule with an opaque part runs on the engine, not on a table
+(`TestTableRulesTabled`). An opaque rule inside `ZeroOrMore` or `OneOrMore` can
+cost time that grows with the square of the token length. This happens when
+the rule can end at many positions, such as a hand-written run of letters. On
+the engine, the combinators merge two runs of a core rule that are in the same
+state, but they cannot merge the runs of an opaque rule. Build the repeated
+part from `rules/core` instead, for example `core.RuneRun(core.ASCIIWord)`.
+The *Cost* entry of [Composition and
 ambiguity](specs/composition.md#composition-and-ambiguity) states this cost,
 and `TestOpaqueZeroOrMoreIsNotMerged` (`rules/core/cost_internal_test.go`)
 checks it.

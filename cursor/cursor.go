@@ -248,7 +248,9 @@ type Checkpoint struct {
 // and c.mu.
 func (c *Checkpoint) markLocked(t *Reader) {
 	c.pos = t.cursorLocked()
-	c.byteOffset = t.pos.Offset()
+	// The byte offset of the logical cursor is the offset of the position,
+	// which cursorLocked has just read with the line and the column.
+	c.byteOffset = c.pos.byteOffset
 	c.runeOffset = t.runeOffset
 	c.carry = t.utf8Carry
 	c.carryLen = t.utf8CarryLen
@@ -336,15 +338,23 @@ func (t *Reader) Checkpoint() *Checkpoint {
 // stays released and an active value stays active, and the reader is left
 // exactly as it was.
 func (t *Reader) Remark(c *Checkpoint) error {
+	_, err := t.remark(c)
+	return err
+}
+
+// remark is Remark. It also returns the position it marked, which is what
+// Pos on c returns after it, so the lean read path does not lock c again to
+// read it (leanReader.Mark).
+func (t *Reader) remark(c *Checkpoint) (Pos, error) {
 	if c == nil {
-		return ErrCheckpointReleased
+		return Pos{}, ErrCheckpointReleased
 	}
 
 	// Claim the value before touching reader state. A released checkpoint has
 	// a nil reader pointer; if the CAS fails, the value is active somewhere —
 	// on this reader or another — and must be refused rather than retargeted.
 	if !c.reader.CompareAndSwap(nil, t) {
-		return ErrCheckpointActive
+		return Pos{}, ErrCheckpointActive
 	}
 
 	t.mu.Lock()
@@ -360,11 +370,12 @@ func (t *Reader) Remark(c *Checkpoint) error {
 	c.mu.Lock()
 	c.markLocked(t)
 	c.active = true
+	pos := c.pos
 	c.mu.Unlock()
 	t.checkpoints = append(t.checkpoints, c)
 	t.epoch.Add(1)
 
-	return nil
+	return pos, nil
 }
 
 // Pos returns the position that was marked.
@@ -562,12 +573,7 @@ func (c *Checkpoint) Release() error {
 }
 
 func (t *Reader) releaseCheckpointLocked(c *Checkpoint) error {
-	for i, other := range t.checkpoints {
-		if other == c {
-			t.checkpoints = append(t.checkpoints[:i], t.checkpoints[i+1:]...)
-			break
-		}
-	}
+	t.dropCheckpointLocked(c)
 
 	// Deregistration under c.mu: a concurrent Pos or Remark on another
 	// reader must observe either the fully armed or the fully released
@@ -580,6 +586,21 @@ func (t *Reader) releaseCheckpointLocked(c *Checkpoint) error {
 	c.reader.Store(nil)
 
 	return nil
+}
+
+// dropCheckpointLocked removes c from the active set of the reader. The caller
+// holds t.mu. The order of the set does not matter (see Reader.checkpoints), so
+// the last entry takes the place of c, and nothing else moves.
+func (t *Reader) dropCheckpointLocked(c *Checkpoint) {
+	for i, other := range t.checkpoints {
+		if other == c {
+			last := len(t.checkpoints) - 1
+			t.checkpoints[i] = t.checkpoints[last]
+			t.checkpoints[last] = nil
+			t.checkpoints = t.checkpoints[:last]
+			return
+		}
+	}
 }
 
 // RetainedBytes reports how many bytes the reader currently holds for

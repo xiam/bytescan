@@ -61,7 +61,7 @@ func input(tb testing.TB, c Case) []byte {
 	return in
 }
 
-// BenchmarkCase runs every reference case in the lane of -lane. Its timer
+// BenchmarkCase runs every case of namedCases in the lane of -lane. Its timer
 // runs only over the interval of the harness: from before the first Next to
 // after the last Next returns. The setup of the scanner is outside it. In
 // the wrapped and the instrumented lanes it logs the counts of the run as a
@@ -70,7 +70,7 @@ func input(tb testing.TB, c Case) []byte {
 // The runner internal/bench/cmd/benchreport runs it with -test.benchtime 1x,
 // one case and one lane per process.
 func BenchmarkCase(b *testing.B) {
-	for _, c := range cases() {
+	for _, c := range namedCases() {
 		c := c
 		b.Run(c.name, func(b *testing.B) {
 			in := input(b, c)

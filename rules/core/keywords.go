@@ -28,7 +28,8 @@ func Keywords(words ...string) bytescan.Rule {
 // the symbol after the word is not in c: (?:w1|w2|...)(?!c), in Perl notation.
 // It is Keywords with the guard class c, for a language whose identifiers
 // continue with other runes, such as the Unicode identifier parts of SQL. It
-// panics if c is nil, no word is given or a word is empty.
+// panics if c is nil, no word is given or a word is empty. c must give the
+// same answer for the same rune and have no side effect (see Class).
 func KeywordsWithGuard(c Class, words ...string) bytescan.Rule {
 	mustClass("KeywordsWithGuard", c)
 	return keywords("KeywordsWithGuard", c, words, false)
@@ -49,7 +50,8 @@ func KeywordsIgnoreCase(words ...string) bytescan.Rule {
 // Unicode simple case folding, matched only when the symbol after the word is
 // not in c: (?i:w1|w2|...)(?!c), in Perl notation. It is KeywordsIgnoreCase
 // with the guard class c. It panics if c is nil, no word is given or a word is
-// empty.
+// empty. c must give the same answer for the same rune and have no side
+// effect (see Class).
 func KeywordsIgnoreCaseWithGuard(c Class, words ...string) bytescan.Rule {
 	mustClass("KeywordsIgnoreCaseWithGuard", c)
 	return keywords("KeywordsIgnoreCaseWithGuard", c, words, true)

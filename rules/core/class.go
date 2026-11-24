@@ -10,22 +10,34 @@ import (
 //
 // A Class sees only the rune. Positional conditions, such as the beginning of
 // a line or the end of input, are not classes.
+//
+// A Class gives the same answer every time it is asked about the same rune,
+// and it has no side effect: it writes no variable and performs no I/O. This
+// holds for a predicate that the caller converts to a Class too. It is
+// practice 6 of docs/rule-authoring.md, which the owner adopted on
+// 2026-11-23 in the words "Adopt practice 6 (Recommended)". Nothing checks it
+// at run time. A rule of this package may ask a class about a rune once and
+// reuse the answer, so a class that breaks it can give other tokens.
 type Class func(rune) bool
 
-// Not returns the complement of c: [^c].
+// Not returns the complement of c: [^c]. c must give the same answer for
+// the same rune and have no side effect (see Class).
 func (c Class) Not() Class {
 	mustClass("Class.Not", c)
 	return func(r rune) bool { return !c(r) }
 }
 
-// Or returns the union of c and o: [co].
+// Or returns the union of c and o: [co]. c and o must give the same answer
+// for the same rune and have no side effect (see Class).
 func (c Class) Or(o Class) Class {
 	mustClass("Class.Or", c)
 	mustClass("Class.Or", o)
 	return func(r rune) bool { return c(r) || o(r) }
 }
 
-// And returns the intersection of c and o: the runes in both.
+// And returns the intersection of c and o: the runes in both. c and o must
+// give the same answer for the same rune and have no side effect (see
+// Class).
 func (c Class) And(o Class) Class {
 	mustClass("Class.And", c)
 	mustClass("Class.And", o)

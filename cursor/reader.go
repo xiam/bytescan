@@ -108,7 +108,8 @@ type Reader struct {
 	r int
 	w int
 
-	// checkpoints holds the active checkpoints, oldest first.
+	// checkpoints holds the active checkpoints, in no particular order: the
+	// retention floor is the lowest mark among them (retainFloor).
 	checkpoints []*Checkpoint
 
 	// readErr is a sticky error returned by the underlying source. Replaying
@@ -536,11 +537,11 @@ func (t *Reader) accountBytes(b []byte) {
 // scanLocked advances the logical position over b, which continues the stream
 // at the position. It updates the line, column and byte offset, not the rune
 // offset. In text mode b is decoded as UTF-8. In byte mode each byte counts as
-// one rune.
-func (t *Reader) scanLocked(b []byte) {
+// one rune. It returns the line, the column and the byte offset before the
+// move, as position.Position.Scan does; b must not be empty in byte mode.
+func (t *Reader) scanLocked(b []byte) (line, column, offset int) {
 	if !t.byteMode {
-		t.pos.Scan(b)
-		return
+		return t.pos.Scan(b)
 	}
 
 	// position.Position.Scan decodes UTF-8, and it decodes a byte that does not
@@ -549,6 +550,7 @@ func (t *Reader) scanLocked(b []byte) {
 	// below ends at the first such byte, which has no byte after it in the
 	// segment. So Scan counts every byte of the segment as one rune, and the
 	// position API needs no byte-mode variant.
+	first := true
 	for len(b) > 0 {
 		i := 0
 		for i < len(b) {
@@ -558,9 +560,13 @@ func (t *Reader) scanLocked(b []byte) {
 				break
 			}
 		}
-		t.pos.Scan(b[:i])
+		l, c, o := t.pos.Scan(b[:i])
+		if first {
+			line, column, offset, first = l, c, o, false
+		}
 		b = b[i:]
 	}
+	return line, column, offset
 }
 
 // fillRuneLocked makes the buffer hold the next rune at the cursor, reading the
@@ -954,6 +960,11 @@ func (t *Reader) Seek(offset int64, whence int) (int64, error) {
 	defer t.mu.Unlock()
 	t.ctr.lock()
 
+	return t.seekLocked(offset, whence)
+}
+
+// seekLocked is Seek with the reader's lock held.
+func (t *Reader) seekLocked(offset int64, whence int) (int64, error) {
 	current := int64(t.pos.Offset())
 	bufferStart := current - int64(t.r)
 

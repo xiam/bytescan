@@ -150,19 +150,43 @@ func (p *Position) Scan(in []byte) (line, column, offset int) {
 		zl = 0
 	}
 
-	for len(in) > 0 {
-		r, size := utf8.DecodeRune(in)
-		if r == newLine {
-			p.runesPerLine = append(p.runesPerLine, 0)
-			p.bytesPerLine = append(p.bytesPerLine, 0)
-			zl++
-		} else {
-			p.runesPerLine[zl]++
-			p.bytesPerLine[zl] += size
+	// runes and bytes count the current line's runes since the last newline
+	// of in. They are added to the tables at a newline and at the end, and
+	// only when the line got a rune that is not a newline: the loop of one
+	// DecodeRune per rune indexed the tables only then, and after ScanRunes,
+	// which fills only the rune table, bytesPerLine can still be empty. An
+	// ASCII byte is one rune of one byte, so only a byte from utf8.RuneSelf
+	// on is decoded.
+	runes, bytes := 0, 0
+	for i := 0; i < len(in); {
+		c := in[i]
+		if c < utf8.RuneSelf {
+			i++
+			if c == newLine {
+				if runes > 0 {
+					p.runesPerLine[zl] += runes
+					p.bytesPerLine[zl] += bytes
+				}
+				p.runesPerLine = append(p.runesPerLine, 0)
+				p.bytesPerLine = append(p.bytesPerLine, 0)
+				zl++
+				runes, bytes = 0, 0
+				continue
+			}
+			runes++
+			bytes++
+			continue
 		}
-		p.offset += size
-		in = in[size:]
+		_, size := utf8.DecodeRune(in[i:])
+		i += size
+		runes++
+		bytes += size
 	}
+	if runes > 0 {
+		p.runesPerLine[zl] += runes
+		p.bytesPerLine[zl] += bytes
+	}
+	p.offset += len(in)
 
 	return line, column, offset
 }

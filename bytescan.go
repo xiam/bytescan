@@ -216,6 +216,21 @@ type Scanner struct {
 	// token until the rules decide it (see readSymbolLean).
 	lean leanread.Reader
 
+	// advancer is the commit operation of the lean read path, or nil when
+	// the read path has none. With it, the commit of a token moves the cursor
+	// to the end of the token with a position computed from the token's
+	// runes (see leanExtent), instead of a Seek that decodes the token's
+	// bytes again. It is set once at construction, with lean.
+	advancer leanread.Advancer[cursor.Pos]
+
+	// boundary holds the operations of the lean read path at the boundary
+	// between two tokens, or nil when the read path has none. With it,
+	// remarkSlot re-arms a mark and gets its position under one lock of the
+	// cursor, and the commit of a token moves the cursor and releases the
+	// oldest committed mark under one lock (see leanCommit). It is set once
+	// at construction, with lean.
+	boundary leanread.Boundary[cursor.Pos, *cursor.Checkpoint]
+
 	// leanWin holds the runes of the last Peek, and leanN is their number.
 	// leanI is the next rune to read from it. leanAt is the position the
 	// last Peek started at. leanSkip is the number of bytes of the symbols
@@ -341,6 +356,8 @@ func newWithCursorConfig(c Cursor, cfg *config) *Scanner {
 	}
 	if l, ok := leanread.Of(c); ok {
 		sc.lean = l
+		sc.advancer, _ = l.(leanread.Advancer[cursor.Pos])
+		sc.boundary, _ = l.(leanread.Boundary[cursor.Pos, *cursor.Checkpoint])
 	}
 	sc.maxTokenBytes = cfg.maxTokenBytes
 	return sc
@@ -693,6 +710,46 @@ func (sc *Scanner) leanAdvance(rp *rulesProcessor) error {
 	return nil
 }
 
+// leanCommit moves the cursor, which the lean read path left at the start of
+// the token, over the n bytes of the token, whose text is text, and returns
+// the position after the move. No Peek of the token decoded an incomplete
+// sequence. With the commit operation of the read path (advancer), the
+// position comes from the runes of the text; otherwise it is a Seek.
+//
+// old is the mark that the commit releases (see commit). With the boundary
+// operations of the read path, the move releases it under the same lock of the
+// cursor, and leanCommit reports released. Otherwise commit releases it.
+func (sc *Scanner) leanCommit(text []rune, n int, old *cursor.Checkpoint) (end cursor.Pos, released bool, err error) {
+	if sc.boundary != nil {
+		end, err = sc.boundary.AdvanceRelease(n, leanExtent(text), old)
+		return end, true, err
+	}
+	if sc.advancer != nil {
+		end, err = sc.advancer.Advance(n, leanExtent(text))
+		return end, false, err
+	}
+	if _, err := sc.cursor.Seek(int64(n), io.SeekCurrent); err != nil {
+		return cursor.Pos{}, false, err
+	}
+	return sc.cursor.Cursor(), false, nil
+}
+
+// leanExtent describes the text of a token for leanread.Advancer.Advance and
+// leanread.Boundary.AdvanceRelease: its runes, its newlines, and the runes
+// after its last newline. Each symbol of the token is one rune of the text, in
+// text mode and in byte mode, and a newline is the rune 0x0A in both, so the
+// counts are the counts the cursor makes over the token's bytes.
+func leanExtent(text []rune) leanread.Extent {
+	ext := leanread.Extent{Runes: len(text)}
+	for i, r := range text {
+		if r == '\n' {
+			ext.Lines++
+			ext.Column = len(text) - i - 1
+		}
+	}
+	return ext
+}
+
 // dropCarry drops the symbols carried past the last token, and the runes of
 // leanWin that are not shown yet. The next token reads from the cursor.
 func (sc *Scanner) dropCarry() {
@@ -838,20 +895,28 @@ func startFlags(starter startCursor) uint {
 // (an active value, which the invariant above rules out) falls back to a fresh
 // Checkpoint and replaces the slot's stale value, so the token still arms a
 // valid mark.
-func (sc *Scanner) remarkSlot(idx int) *cursor.Checkpoint {
-	if sc.canRemark {
-		if c := sc.marks[idx]; c != nil {
-			if err := sc.cursor.(remarkableCursor).Remark(c); err == nil {
-				return c
+//
+// It also returns the marked position, which Pos on the checkpoint returns.
+// With the boundary operations of the lean read path, the re-arm and the
+// position take one lock of the cursor (leanread.Boundary.Mark).
+func (sc *Scanner) remarkSlot(idx int) (*cursor.Checkpoint, cursor.Pos) {
+	if c := sc.marks[idx]; c != nil {
+		if sc.boundary != nil {
+			if pos, err := sc.boundary.Mark(c); err == nil {
+				return c, pos
 			}
-			// Remark refused: fall through to a fresh checkpoint and replace
-			// the slot's value below.
+		} else if sc.canRemark {
+			if err := sc.cursor.(remarkableCursor).Remark(c); err == nil {
+				return c, c.Pos()
+			}
 		}
+		// Remark refused: fall through to a fresh checkpoint and replace
+		// the slot's value below.
 	}
 
 	c := sc.cursor.Checkpoint()
 	sc.marks[idx] = c
-	return c
+	return c, c.Pos()
 }
 
 // nextToken lexes the next token and returns it with its Lookahead record.
@@ -864,17 +929,16 @@ func (sc *Scanner) nextToken() (*Token, Lookahead, error) {
 
 	// Mark the start of the token in the in-flight slot: the cursor retains every
 	// byte from here until the token is committed, which is what makes the
-	// rewind below exact and what WithMaxTokenBytes bounds.
-	mark := sc.remarkSlot(sc.marksNext)
+	// rewind below exact and what WithMaxTokenBytes bounds. start is the
+	// position of the mark: the position of the token's first byte.
+	mark, start := sc.remarkSlot(sc.marksNext)
 
 	tokenBytes := 0
 	sc.leanSkip, sc.leanPartial = 0, false
 
-	// start is the position of the token's first byte. On the lean read path
-	// the token first uses the symbols carried past the last token, when the
+	// On the lean read path the token first uses the symbols carried past the last token, when the
 	// cursor is still where that commit left it (see takeCarry). carryFrom
 	// is the index of the first of them in sc.carry.
-	start := mark.Pos()
 	carryFrom := 0
 	if sc.lean != nil {
 		carryFrom = sc.takeCarry(start.ByteOffset())
@@ -996,13 +1060,13 @@ func (sc *Scanner) nextToken() (*Token, Lookahead, error) {
 			// keepCarry). The bytes of the overshoot are the bytes of the
 			// symbols read minus the bytes of the token: the After of the
 			// record.
-			if _, err := sc.cursor.Seek(int64(spanBytes), io.SeekCurrent); err != nil {
+			end, released, err := sc.leanCommit(runes, spanBytes, sc.marks[sc.oldestSlot()])
+			if err != nil {
 				return abandon(fmt.Errorf("bytescan: commit cursor: %w", err))
 			}
-			end := sc.cursor.Cursor()
 			la := Lookahead{ReadEnd: isEOF, After: sc.leanSkip - spanBytes}
 			sc.keepCarry(processor, read, textLen, carryFrom, sc.carryI-carryFrom, end.ByteOffset())
-			return sc.commit(typ, runes, box, cursor.NewSpan(start, end), la)
+			return sc.commit(typ, runes, box, cursor.NewSpan(start, end), la, released)
 		}
 
 		if sc.lean != nil {
@@ -1038,24 +1102,34 @@ func (sc *Scanner) nextToken() (*Token, Lookahead, error) {
 			sc.ctr.stepBack(overshoot)
 		}
 
-		return sc.commit(typ, runes, box, cursor.NewSpan(start, end), la)
+		return sc.commit(typ, runes, box, cursor.NewSpan(start, end), la, false)
 	}
+}
+
+// oldestSlot is the slot of the oldest committed mark: the slot just ahead
+// of the in-flight slot in the ring. The commit of a token releases it.
+func (sc *Scanner) oldestSlot() int {
+	return (sc.marksNext + 1) % markSlots
 }
 
 // commit ends a token whose cursor sits at the end of span: it moves the ring
 // of marks on and builds the token. box holds the token when its text is
-// inline, and runes is its text.
-func (sc *Scanner) commit(typ TokenType, runes []rune, box *tokenBox, span cursor.Span, la Lookahead) (*Token, Lookahead, error) {
+// inline, and runes is its text. released reports that the move of the cursor
+// over the token already released the oldest committed mark (see
+// leanCommit).
+func (sc *Scanner) commit(typ TokenType, runes []rune, box *tokenBox, span cursor.Span, la Lookahead, released bool) (*Token, Lookahead, error) {
 	// The token is committed: its in-flight slot now holds a committed mark
 	// (remarkSlot stored or re-armed it there), and the oldest committed
 	// mark — the slot immediately ahead in the ring — is displaced. It is
-	// released, but its value stays in the slot to be re-armed in place on
-	// the next pass, so the reuse path allocates no checkpoint. A mark is
-	// never released by a call that did not commit a token.
-	if old := sc.marks[(sc.marksNext+1)%markSlots]; old != nil {
+	// released here, or already by the move of the cursor (released), but
+	// its value stays in the slot to be re-armed in place on the next pass,
+	// so the reuse path allocates no checkpoint. A mark is never released by
+	// a call that did not commit a token.
+	next := sc.oldestSlot()
+	if old := sc.marks[next]; old != nil && !released {
 		_ = old.Release()
 	}
-	sc.marksNext = (sc.marksNext + 1) % markSlots
+	sc.marksNext = next
 
 	sc.ctr.token(typ, box == nil)
 
