@@ -2,7 +2,6 @@ package special_test
 
 import (
 	"bufio"
-	"errors"
 	"io"
 	"os"
 	"strconv"
@@ -260,7 +259,7 @@ func TestSpecialEmptyInput(t *testing.T) {
 			lx := bytescan.New(strings.NewReader(""))
 			lx.MustAddRule(lexTypeR, rule)
 			lex, err := lx.Next()
-			assert.True(t, errors.Is(err, io.EOF), "Next on empty input: %v", err)
+			assert.ErrorIs(t, err, io.EOF, "Next on empty input: %v", err)
 			assert.Nil(t, lex)
 		})
 	}
@@ -418,7 +417,7 @@ func TestEmojiRGISequences(t *testing.T) {
 		if want := []string{r(s.text, 0)}; !assert.ObjectsAreEqual(want, got) {
 			failures++
 			if failures <= 10 {
-				t.Errorf("line %d (%s) %+q: got %v", s.line, s.typ, s.text, got)
+				assert.Failf(t, "mismatch", "line %d (%s) %+q: got %v", s.line, s.typ, s.text, got)
 			}
 		}
 	}

@@ -40,6 +40,7 @@ package tests
 import (
 	"testing"
 
+	"github.com/stretchr/testify/require"
 	"github.com/xiam/bytescan"
 )
 
@@ -92,7 +93,7 @@ func pushBackChain(n int, s bytescan.State) bytescan.Rule {
 // instrumentation around a rule, not a rule.
 //
 // The wrapped rule runs inside Next, so the test must call Next on the test
-// goroutine; t.Fatalf is then legal there. callRule recovers panics but not
+// goroutine; require is then legal there. callRule recovers panics but not
 // runtime.Goexit, so the failure stops the test instead of retiring the rule.
 // A defect that loops without invoking any rule is not caught here; go test
 // -timeout remains the backstop for it.
@@ -103,7 +104,7 @@ func boundedRule(t testing.TB, budget int, r bytescan.Rule) bytescan.Rule {
 		return func(s bytescan.Symbol) (bytescan.Rule, bytescan.State) {
 			calls++
 			if calls > budget {
-				t.Fatalf("rule invoked more than %d times: the scanner does not terminate", budget)
+				require.FailNowf(t, "rule invocation budget exceeded", "rule invoked more than %d times: the scanner does not terminate", budget)
 			}
 			next, state := r(s)
 			if next != nil {

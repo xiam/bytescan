@@ -10,6 +10,9 @@ import (
 	"strconv"
 	"strings"
 	"testing"
+
+	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
 )
 
 // The cursor is import-independent: a program can use it without the rest of
@@ -35,9 +38,7 @@ const (
 func TestImportIndependence(t *testing.T) {
 	for _, dir := range []string{".", "position"} {
 		entries, err := os.ReadDir(dir)
-		if err != nil {
-			t.Fatalf("read %s: %v", dir, err)
-		}
+		require.NoErrorf(t, err, "read %s: %v", dir, err)
 
 		var checked int
 		for _, entry := range entries {
@@ -49,14 +50,10 @@ func TestImportIndependence(t *testing.T) {
 			isTest := strings.HasSuffix(name, "_test.go")
 
 			file, err := parser.ParseFile(token.NewFileSet(), path, nil, parser.ImportsOnly|parser.ParseComments)
-			if err != nil {
-				t.Fatalf("parse %s: %v", path, err)
-			}
+			require.NoErrorf(t, err, "parse %s: %v", path, err)
 			for _, spec := range file.Imports {
 				imp, err := strconv.Unquote(spec.Path.Value)
-				if err != nil {
-					t.Fatalf("%s: bad import %s: %v", path, spec.Path.Value, err)
-				}
+				require.NoErrorf(t, err, "%s: bad import %s: %v", path, spec.Path.Value, err)
 				if imp == countersPath && !isTest && benchOnly(t, path, file.Comments) {
 					continue
 				}
@@ -64,8 +61,7 @@ func TestImportIndependence(t *testing.T) {
 					continue
 				}
 				if !allowedImport(imp, isTest) {
-					t.Errorf("%s imports %q; the cursor must import only the standard library, %s and %s%s",
-						path, imp, positionPath, leanreadPath, testNote(isTest))
+					assert.Failf(t, "unexpected test state", "%s imports %q; the cursor must import only the standard library, %s and %s%s", path, imp, positionPath, leanreadPath, testNote(isTest))
 				}
 			}
 			if !isTest {
@@ -73,9 +69,7 @@ func TestImportIndependence(t *testing.T) {
 			}
 		}
 
-		if checked == 0 {
-			t.Fatalf("no non-test Go files found in %s", dir)
-		}
+		require.Falsef(t, checked == 0, "no non-test Go files found in %s", dir)
 	}
 }
 
@@ -91,9 +85,7 @@ func benchOnly(t *testing.T, path string, comments []*ast.CommentGroup) bool {
 				continue
 			}
 			expr, err := constraint.Parse(c.Text)
-			if err != nil {
-				t.Fatalf("%s: bad build constraint %q: %v", path, c.Text, err)
-			}
+			require.NoErrorf(t, err, "%s: bad build constraint %q: %v", path, c.Text, err)
 			return benchOnlyExpr(expr)
 		}
 	}
@@ -122,11 +114,10 @@ func TestBenchOnlyExpr(t *testing.T) {
 	}
 	for line, want := range cases {
 		expr, err := constraint.Parse(line)
-		if err != nil {
-			t.Fatalf("parse %q: %v", line, err)
-		}
-		if got := benchOnlyExpr(expr); got != want {
-			t.Errorf("benchOnlyExpr(%q) = %v, want %v", line, got, want)
+		require.NoErrorf(t, err, "parse %q: %v", line, err)
+		{
+			got := benchOnlyExpr(expr)
+			assert.Truef(t, got == want, "benchOnlyExpr(%q) = %v, want %v", line, got, want)
 		}
 	}
 }

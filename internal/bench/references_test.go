@@ -8,6 +8,8 @@ import (
 	"slices"
 	"testing"
 
+	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
 	"github.com/xiam/bytescan"
 	"github.com/xiam/bytescan/internal/lextest"
 	"github.com/xiam/bytescan/streamtest"
@@ -21,9 +23,7 @@ func refInput(t *testing.T, c Case) (in []byte, ok bool) {
 	switch {
 	case c.name == "stream":
 		in, err := generate(streamtest.NewGenerator(1, lineRecord, streamtest.WithBudget(1<<20)))
-		if err != nil {
-			t.Fatal(err)
-		}
+		require.NoError(t, err)
 		return in, true
 	case c.name == "code" && lextest.RaceDetector:
 		return nil, false
@@ -38,8 +38,9 @@ func refInput(t *testing.T, c Case) (in []byte, ok bool) {
 func TestReferencesLex(t *testing.T) {
 	for _, c := range cases() {
 		if c.name == "slip" {
-			if refs := references(c); refs != nil {
-				t.Errorf("slip has the references %v, want none", refs)
+			{
+				refs := references(c)
+				assert.Truef(t, refs == nil, "slip has the references %v, want none", refs)
 			}
 			continue
 		}
@@ -47,8 +48,9 @@ func TestReferencesLex(t *testing.T) {
 		if c.name == "json" {
 			wantRefs = append(wantRefs, jsonDecoder)
 		}
-		if got := references(c); !slices.Equal(got, wantRefs) {
-			t.Fatalf("%s: references %v, want %v", c.name, got, wantRefs)
+		{
+			got := references(c)
+			require.Truef(t, slices.Equal(got, wantRefs), "%s: references %v, want %v", c.name, got, wantRefs)
 		}
 		in, ok := refInput(t, c)
 		if !ok {
@@ -71,33 +73,28 @@ func TestReferencesLex(t *testing.T) {
 			if err == io.EOF {
 				break
 			}
-			if err != nil {
-				t.Fatalf("%s: %v", c.name, err)
-			}
+			require.NoErrorf(t, err, "%s: %v", c.name, err)
 			want = append(want, token{tok.Type(), tok.ByteOffset()})
 		}
 
 		// The tokens of the regexp lexer.
-		if n := len(tokenClasses[c.name]); n != len(rules) {
-			t.Fatalf("%s: %d token classes for %d rules", c.name, n, len(rules))
+		{
+			n := len(tokenClasses[c.name])
+			require.Truef(t, n == len(rules), "%s: %d token classes for %d rules", c.name, n, len(rules))
 		}
 		re := regexp.MustCompile(refPattern(c))
 		re.Longest()
 		var got []token
 		for pos := 0; pos < len(in); {
 			loc := re.FindSubmatchIndex(in[pos:])
-			if loc == nil || loc[1] == 0 {
-				t.Fatalf("%s: the regexp lexer matches nothing at byte %d", c.name, pos)
-			}
+			require.Falsef(t, loc == nil || loc[1] == 0, "%s: the regexp lexer matches nothing at byte %d", c.name, pos)
 			got = append(got, token{rules[class(loc)].typ, pos})
 			pos += loc[1]
 		}
-		if len(got) != len(want) {
-			t.Errorf("%s: the regexp lexer gives %d tokens, bytescan %d", c.name, len(got), len(want))
-		}
+		assert.Truef(t, len(got) == len(want), "%s: the regexp lexer gives %d tokens, bytescan %d", c.name, len(got), len(want))
 		for i := 0; i < min(len(got), len(want)); i++ {
 			if got[i] != want[i] {
-				t.Errorf("%s: token %d is %v, bytescan gives %v", c.name, i, got[i], want[i])
+				assert.Failf(t, "unexpected test state", "%s: token %d is %v, bytescan gives %v", c.name, i, got[i], want[i])
 				break
 			}
 		}
@@ -106,19 +103,11 @@ func TestReferencesLex(t *testing.T) {
 		// on the run.
 		for _, tl := range references(c) {
 			first, err := refLex(c, tl, in, nop, nop)
-			if err != nil {
-				t.Fatalf("%s, %s: %v", c.name, tl, err)
-			}
+			require.NoErrorf(t, err, "%s, %s: %v", c.name, tl, err)
 			second, err := refLex(c, tl, in, nop, nop)
-			if err != nil {
-				t.Fatalf("%s, %s: %v", c.name, tl, err)
-			}
-			if first.Tokens == 0 || first != second {
-				t.Errorf("%s, %s: counted %+v, then %+v", c.name, tl, first, second)
-			}
-			if tl == regexpLexer && (first.Tokens != uint64(len(want)) || first.Errors != 0) {
-				t.Errorf("%s, regexp: counted %+v, want %d tokens and no error", c.name, first, len(want))
-			}
+			require.NoErrorf(t, err, "%s, %s: %v", c.name, tl, err)
+			assert.Falsef(t, first.Tokens == 0 || first != second, "%s, %s: counted %+v, then %+v", c.name, tl, first, second)
+			assert.Falsef(t, tl == regexpLexer && (first.Tokens != uint64(len(want)) || first.Errors != 0), "%s, regexp: counted %+v, want %d tokens and no error", c.name, first, len(want))
 		}
 	}
 }
@@ -141,9 +130,7 @@ func TestJSONDecoderEvents(t *testing.T) {
 		if err == io.EOF {
 			break
 		}
-		if err != nil {
-			t.Fatal(err)
-		}
+		require.NoError(t, err)
 		var want json.Token
 		switch tok.Type() {
 		case "WHITESPACE", "NAME_SEPARATOR", "VALUE_SEPARATOR":
@@ -152,22 +139,24 @@ func TestJSONDecoderEvents(t *testing.T) {
 			want = json.Delim(tok.Text()[0])
 		case "STRING", "NUMBER", "TRUE", "FALSE", "NULL":
 			if err := json.Unmarshal([]byte(tok.Text()), &want); err != nil {
-				t.Fatalf("decode lexer token at byte %d: %v", tok.ByteOffset(), err)
+				require.FailNowf(t, "unexpected test state", "decode lexer token at byte %d: %v", tok.ByteOffset(), err)
 			}
 		default:
-			t.Fatalf("unexpected lexer token %s at byte %d", tok.Type(), tok.ByteOffset())
+			require.FailNowf(t, "unexpected test state", "unexpected lexer token %s at byte %d", tok.Type(), tok.ByteOffset())
 		}
 		got, err := decoder.Token()
 		if err != nil || got != want {
-			t.Fatalf("event %d at byte %d: got %v (%v), want %v", events, tok.ByteOffset(), got, err, want)
+			require.FailNowf(t, "unexpected test state", "event %d at byte %d: got %v (%v), want %v", events, tok.ByteOffset(), got, err, want)
 		}
 		events++
 	}
-	if _, err := decoder.Token(); err != io.EOF {
-		t.Fatalf("decoder did not reach EOF with the lexer: %v", err)
+	{
+		_, err := decoder.Token()
+		require.Truef(t, err == io.EOF, "decoder did not reach EOF with the lexer: %v", err)
 	}
-	if got, err := refLex(c, jsonDecoder, in, nop, nop); err != nil || got != (refResult{Tokens: events}) {
-		t.Fatalf("timed reference counted %+v (%v), want %d events and no errors", got, err, events)
+	{
+		got, err := refLex(c, jsonDecoder, in, nop, nop)
+		require.Falsef(t, err != nil || got != (refResult{Tokens: events}), "timed reference counted %+v (%v), want %d events and no errors", got, err, events)
 	}
 }
 
@@ -175,15 +164,18 @@ func TestJSONDecoderEvents(t *testing.T) {
 // input, and that refLex refuses an unknown reference.
 func TestRefLexRejects(t *testing.T) {
 	c, _ := findCase("large")
-	if _, err := refLex(c, regexpLexer, []byte("a ="), nop, nop); err == nil {
-		t.Errorf("the regexp lexer accepted %q", "a =")
+	{
+		_, err := refLex(c, regexpLexer, []byte("a ="), nop, nop)
+		assert.Falsef(t, err == nil, "the regexp lexer accepted %q", "a =")
 	}
 	jsonCase, _ := findCase("json")
-	if _, err := refLex(jsonCase, jsonDecoder, []byte("[}"), nop, nop); err == nil {
-		t.Error("the JSON decoder accepted mismatched delimiters")
+	{
+		_, err := refLex(jsonCase, jsonDecoder, []byte("[}"), nop, nop)
+		assert.False(t, err == nil, "the JSON decoder accepted mismatched delimiters")
 	}
-	if _, err := refLex(c, "lex", []byte("a"), nop, nop); err == nil {
-		t.Errorf("refLex accepted an unknown reference")
+	{
+		_, err := refLex(c, "lex", []byte("a"), nop, nop)
+		assert.Falsef(t, err == nil, "refLex accepted an unknown reference")
 	}
 }
 
@@ -196,16 +188,14 @@ func TestParseRefRun(t *testing.T) {
 		"--- BENCH: BenchmarkReference/json/regexp-12\n" +
 		"    bench_test.go:140: reference {\"Tokens\":792586,\"Errors\":0}\nPASS\n")
 	res, procs, err := parseRefRun(out, c, regexpLexer)
-	if err != nil {
-		t.Fatal(err)
+	require.NoError(t, err)
+	assert.Falsef(t, res != (refResult{Tokens: 792586}) || procs != 12, "parseRefRun = %+v, %d, want 792586 tokens and GOMAXPROCS 12", res, procs)
+	{
+		_, _, err := parseRefRun(out, c, textScanner)
+		assert.Falsef(t, err == nil, "parseRefRun accepted the line of another tool")
 	}
-	if res != (refResult{Tokens: 792586}) || procs != 12 {
-		t.Errorf("parseRefRun = %+v, %d, want 792586 tokens and GOMAXPROCS 12", res, procs)
-	}
-	if _, _, err := parseRefRun(out, c, textScanner); err == nil {
-		t.Errorf("parseRefRun accepted the line of another tool")
-	}
-	if _, _, err := parseRefRun([]byte("lane: control\nPASS\n"), c, regexpLexer); err == nil {
-		t.Errorf("parseRefRun accepted an output without a benchmark line")
+	{
+		_, _, err := parseRefRun([]byte("lane: control\nPASS\n"), c, regexpLexer)
+		assert.Falsef(t, err == nil, "parseRefRun accepted an output without a benchmark line")
 	}
 }

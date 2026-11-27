@@ -9,6 +9,8 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
 	"github.com/xiam/bytescan"
 )
 
@@ -16,13 +18,15 @@ import (
 // bytescan.Source: an empty queue returns a nil token with a nil error,
 // which a Source must never do.
 func TestFieldsNotSource(t *testing.T) {
-	if _, ok := any((*Fields)(nil)).(bytescan.Source); ok {
-		t.Fatal("*Fields satisfies bytescan.Source; its step method must not be named Next")
+	{
+		_, ok := any((*Fields)(nil)).(bytescan.Source)
+		require.False(t, ok, "*Fields satisfies bytescan.Source; its step method must not be named Next")
 	}
 	f := NewFields(NewCursor(strings.NewReader("abc")))
 	for i := 0; i < 2; i++ {
-		if l, err := f.NextField(); l != nil || err != nil {
-			t.Fatalf("empty queue: NextField = %v, %v; want nil, nil", l, err)
+		{
+			l, err := f.NextField()
+			require.Falsef(t, l != nil || err != nil, "empty queue: NextField = %v, %v; want nil, nil", l, err)
 		}
 	}
 }
@@ -32,7 +36,7 @@ func step(t *testing.T, f *Fields) string {
 	t.Helper()
 	l, err := f.NextField()
 	if err != nil {
-		t.Fatalf("NextField: %v", err)
+		require.NoErrorf(t, err, "NextField: %v", err)
 	}
 	if l == nil {
 		return "nil"
@@ -82,13 +86,11 @@ func TestFieldsChunked(t *testing.T) {
 		"11 TAIL 1 59",
 	}
 	if strings.Join(got, "|") != strings.Join(want, "|") {
-		t.Errorf("tokens\n%s\nwant\n%s", strings.Join(got, "\n"), strings.Join(want, "\n"))
+		assert.Failf(t, "unexpected test state", "tokens\n%s\nwant\n%s", strings.Join(got, "\n"), strings.Join(want, "\n"))
 	}
 	// Done is called once, after two pieces were returned and before the
 	// third, the last one, was; the field it pushed comes after NEXT.
-	if strings.Join(events, "|") != "done after 2" {
-		t.Errorf("Done calls = %q, want [done after 2]", events)
-	}
+	assert.Truef(t, strings.Join(events, "|") == "done after 2", "Done calls = %q, want [done after 2]", events)
 }
 
 func TestFieldsChunkedExactPieces(t *testing.T) {
@@ -96,9 +98,7 @@ func TestFieldsChunkedExactPieces(t *testing.T) {
 	done := 0
 	f.Push(Field{Type: "MSG", Len: 8, MaxPiece: 4, Done: func() { done++ }})
 	got := steps(t, f)
-	if strings.Join(got, "|") != "0 MSG 4 61 62 63 64|4 MSG 4 65 66 67 68" || done != 1 {
-		t.Errorf("tokens %q, Done %d times; want two pieces of 4 and Done once", got, done)
-	}
+	assert.Falsef(t, strings.Join(got, "|") != "0 MSG 4 61 62 63 64|4 MSG 4 65 66 67 68" || done != 1, "tokens %q, Done %d times; want two pieces of 4 and Done once", got, done)
 }
 
 func TestFieldsZeroLength(t *testing.T) {
@@ -111,12 +111,8 @@ func TestFieldsZeroLength(t *testing.T) {
 		Field{Type: "A", Len: 2, MaxPiece: 4},
 	)
 	got := steps(t, f)
-	if strings.Join(got, "|") != "0 A 2 61 62" {
-		t.Errorf("tokens = %q, want only A", got)
-	}
-	if strings.Join(calls, "|") != "zero|negative|then |udone" {
-		t.Errorf("callbacks = %q", calls)
-	}
+	assert.Truef(t, strings.Join(got, "|") == "0 A 2 61 62", "tokens = %q, want only A", got)
+	assert.Truef(t, strings.Join(calls, "|") == "zero|negative|then |udone", "callbacks = %q", calls)
 }
 
 // TestFieldsChunkedTruncated covers a chunked field cut by the end of the
@@ -130,14 +126,11 @@ func TestFieldsChunkedTruncated(t *testing.T) {
 		Field{Type: "NEXT", Len: 1, Done: func() { done = true }},
 	)
 	got := steps(t, f)
-	if strings.Join(got, "|") != "0 MSG 4 61 62 63 64|4 MSG 2 65 66" {
-		t.Errorf("tokens = %q", got)
-	}
-	if done {
-		t.Error("Done was called for a truncated field or a dropped one")
-	}
-	if s := step(t, f); s != "nil" {
-		t.Errorf("after the queue was dropped: %s, want nil", s)
+	assert.Truef(t, strings.Join(got, "|") == "0 MSG 4 61 62 63 64|4 MSG 2 65 66", "tokens = %q", got)
+	assert.False(t, done, "Done was called for a truncated field or a dropped one")
+	{
+		s := step(t, f)
+		assert.Truef(t, s == "nil", "after the queue was dropped: %s, want nil", s)
 	}
 }
 
@@ -150,23 +143,22 @@ func TestFieldsChunkedEndAtBoundary(t *testing.T) {
 		Field{Type: "MSG", Len: 10, MaxPiece: 4, Done: func() { done = true }},
 		Field{Type: "NEXT", Len: 1},
 	)
-	if s := step(t, f); s != "0 MSG 4 61 62 63 64" {
-		t.Fatalf("first piece = %s", s)
+	{
+		s := step(t, f)
+		require.Truef(t, s == "0 MSG 4 61 62 63 64", "first piece = %s", s)
 	}
-	if s := step(t, f); s != "nil" {
-		t.Fatalf("at the end of the input: %s, want nil", s)
+	{
+		s := step(t, f)
+		require.Truef(t, s == "nil", "at the end of the input: %s, want nil", s)
 	}
-	if done {
-		t.Error("Done was called for a truncated field")
-	}
-	if len(f.queue)-f.head != 0 {
-		t.Errorf("queue holds %d fields after the end of the input, want 0", len(f.queue)-f.head)
-	}
+	assert.False(t, done, "Done was called for a truncated field")
+	assert.Truef(t, len(f.queue)-f.head == 0, "queue holds %d fields after the end of the input, want 0", len(f.queue)-f.head)
 	// A field pushed after the drop is read from where the input is: at its
 	// end, so it gives nothing.
 	f.Push(Field{Type: "LATE", Len: 1, MaxPiece: 4})
-	if s := step(t, f); s != "nil" {
-		t.Errorf("late field = %s, want nil", s)
+	{
+		s := step(t, f)
+		assert.Truef(t, s == "nil", "late field = %s, want nil", s)
 	}
 }
 
@@ -190,12 +182,8 @@ func TestFieldsHugeDeclaredLength(t *testing.T) {
 			runtime.ReadMemStats(&after)
 			allocs = after.TotalAlloc - before.TotalAlloc
 		}()
-		if strings.Join(got, "|") != "0 BIG 3 61 62 63" {
-			t.Errorf("MaxPiece %d: tokens = %q", piece, got)
-		}
-		if allocs > 1<<20 {
-			t.Errorf("MaxPiece %d: %d bytes allocated for a 3-byte field", piece, allocs)
-		}
+		assert.Truef(t, strings.Join(got, "|") == "0 BIG 3 61 62 63", "MaxPiece %d: tokens = %q", piece, got)
+		assert.Falsef(t, allocs > 1<<20, "MaxPiece %d: %d bytes allocated for a 3-byte field", piece, allocs)
 	}
 }
 
@@ -209,20 +197,18 @@ func TestFieldsChunkedThen(t *testing.T) {
 		Field{Type: "A", Len: 1},
 		Field{Type: "BAD", Len: 4, MaxPiece: 2, Then: func([]byte) { called = true }},
 	)
-	if s := step(t, f); s != "0 A 1 61" {
-		t.Fatalf("first field = %s", s)
+	{
+		s := step(t, f)
+		require.Truef(t, s == "0 A 1 61", "first field = %s", s)
 	}
 	for i := 0; i < 2; i++ {
 		l, err := f.NextField()
-		if !errors.Is(err, ErrChunkedThen) || l != nil {
-			t.Fatalf("NextField = %v, %v; want nil, ErrChunkedThen", l, err)
-		}
+		require.Falsef(t, !errors.Is(err, ErrChunkedThen) || l != nil, "NextField = %v, %v; want nil, ErrChunkedThen", l, err)
 	}
-	if called {
-		t.Error("Then was called")
-	}
-	if p, _ := Peek(cur, 5); string(p) != "bcdef" {
-		t.Errorf("the cursor moved: next bytes %q, want \"bcdef\"", p)
+	assert.False(t, called, "Then was called")
+	{
+		p, _ := Peek(cur, 5)
+		assert.Truef(t, string(p) == "bcdef", "the cursor moved: next bytes %q, want \"bcdef\"", p)
 	}
 }
 
@@ -236,9 +222,7 @@ func TestFieldsReuse(t *testing.T) {
 		f.Push(Field{Type: "A", Len: 1}, Field{Type: "B", Len: 1, MaxPiece: 4})
 		for {
 			l, err := f.NextField()
-			if err != nil {
-				t.Fatal(err)
-			}
+			require.NoError(t, err)
 			if l == nil {
 				return
 			}
@@ -249,9 +233,7 @@ func TestFieldsReuse(t *testing.T) {
 	for i := 0; i < 100; i++ {
 		run()
 	}
-	if cap(f.queue) != queueCap {
-		t.Errorf("queue storage grew from %d to %d fields", queueCap, cap(f.queue))
-	}
+	assert.Truef(t, cap(f.queue) == queueCap, "queue storage grew from %d to %d fields", queueCap, cap(f.queue))
 }
 
 // TestFieldsPushWhileQueued checks that fields pushed while others wait are
@@ -267,7 +249,7 @@ func TestFieldsPushWhileQueued(t *testing.T) {
 	got = append(got, steps(t, f)...)
 	want := "0 1 1 61|1 2 1 62|2 3 1 63|3 4 1 64|4 5 1 65|5 6 1 66|6 7 1 67|7 8 1 68|8 9 1 69|9 10 1 6a"
 	if strings.Join(got, "|") != want {
-		t.Errorf("order = %q", strings.Join(got, "|"))
+		assert.Failf(t, "unexpected test state", "order = %q", strings.Join(got, "|"))
 	}
 }
 
@@ -330,11 +312,7 @@ func TestFieldsChunkedMemory(t *testing.T) {
 			}
 		}
 	}
-	if read != uint64(size) || done != 1 {
-		t.Fatalf("read %d bytes and called Done %d times, want %d bytes and once", read, done, size)
-	}
-	if peak > ceiling {
-		t.Errorf("live heap rose %d bytes while reading %d bytes in pieces of %d, want at most %d", peak, size, piece, ceiling)
-	}
+	require.Falsef(t, read != uint64(size) || done != 1, "read %d bytes and called Done %d times, want %d bytes and once", read, done, size)
+	assert.Falsef(t, peak > ceiling, "live heap rose %d bytes while reading %d bytes in pieces of %d, want at most %d", peak, size, piece, ceiling)
 	t.Logf("read %d bytes in pieces of %d; live heap peak %d bytes above the start", size, piece, peak)
 }

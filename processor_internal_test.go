@@ -4,6 +4,7 @@ import (
 	"testing"
 
 	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
 )
 
 // These tests call rulesProcessor.Process directly. Through Next, a zero-length
@@ -50,9 +51,7 @@ func processInput(t *testing.T, typ TokenType, rule Rule, input string) (TokenTy
 		}
 	}
 	got, n := rp.Process(NewSymbol(RuneEOF, FlagEOF))
-	if n < 0 {
-		t.Fatalf("rule %q remained active at EOF", typ)
-	}
+	require.Falsef(t, n < 0, "rule %q remained active at EOF", typ)
 	return got, n
 }
 

@@ -1,7 +1,6 @@
 package statelex
 
 import (
-	"errors"
 	mrand "math/rand"
 	"strings"
 	"testing"
@@ -142,7 +141,7 @@ func TestGeneratedEdits(t *testing.T) {
 					}
 					ch, err := lx.Apply(e)
 					if splitsChar(text, e.Start) || splitsChar(text, e.End) {
-						require.True(t, errors.Is(err, ErrSplitRune), "%q %+v", text, e)
+						require.ErrorIs(t, err, ErrSplitRune, "%q %+v", text, e)
 						require.Equal(t, text, heldText(lx))
 						require.Equal(t, scan(t, rules, text), held(lx))
 						refused++

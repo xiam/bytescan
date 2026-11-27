@@ -339,16 +339,16 @@ func TestConcurrentRemarkAdoption(t *testing.T) {
 		go func(i int) {
 			defer wg.Done()
 			// Each goroutine owns its own slot on tr: release it, then re-arm
-			// it in place every iteration. (t.Error, not require: require's
+			// it in place every iteration. (assert, not require: require's
 			// FailNow is not safe from another goroutine.)
 			slot := tr.Checkpoint()
 			if err := slot.Release(); err != nil {
-				t.Error(err)
+				assert.NoError(t, err)
 				return
 			}
 			for j := 0; j < iters; j++ {
 				if err := tr.Remark(slot); err != nil {
-					t.Error(err)
+					assert.NoError(t, err)
 					return
 				}
 				if _, err := tr.ReadLocatedRune(); err != nil {
@@ -357,7 +357,7 @@ func TestConcurrentRemarkAdoption(t *testing.T) {
 					break
 				}
 				if err := slot.Release(); err != nil {
-					t.Error(err)
+					assert.NoError(t, err)
 					return
 				}
 			}

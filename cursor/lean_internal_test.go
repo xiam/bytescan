@@ -10,6 +10,8 @@ import (
 	"testing/iotest"
 	"unicode/utf8"
 
+	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
 	"github.com/xiam/bytescan/internal/leanread"
 )
 
@@ -164,13 +166,9 @@ func leanTwin(t *testing.T, a, b *Reader, batch int, seed int64, advance bool) {
 	t.Helper()
 
 	lean, ok := leanread.Of(a)
-	if !ok {
-		t.Fatal("leanread.Of(*Reader) reports no lean read path")
-	}
+	require.True(t, ok, "leanread.Of(*Reader) reports no lean read path")
 	advancer, ok := lean.(leanread.Advancer[Pos])
-	if !ok {
-		t.Fatal("the lean read path of *Reader has no Advance")
-	}
+	require.True(t, ok, "the lean read path of *Reader has no Advance")
 	var peeked []rune
 
 	rng := rand.New(rand.NewSource(seed))
@@ -199,24 +197,27 @@ func leanTwin(t *testing.T, a, b *Reader, batch int, seed int64, advance bool) {
 			if skip == 0 {
 				// A move of no byte is a Seek that does nothing.
 				if err != nil || got != b.Cursor() {
-					t.Fatalf("Advance(0) = %+v, %v; want %+v", got, err, b.Cursor())
+					require.FailNowf(t, "unexpected test state", "Advance(0) = %+v, %v; want %+v", got, err, b.Cursor())
 				}
 			} else if err != nil {
-				t.Fatalf("lean Advance(%d): %v", skip, err)
-			} else if want := b.Cursor(); got != want {
-				t.Fatalf("Advance(%d) returned %+v, public cursor %+v", skip, got, want)
+				require.FailNowf(t, "unexpected test state", "lean Advance(%d): %v", skip, err)
+			} else {
+				want := b.Cursor()
+				require.Truef(t, got == want, "Advance(%d) returned %+v, public cursor %+v", skip, got, want)
 			}
 		}
 		for _, m := range moves {
 			if m == 0 {
 				continue
 			}
-			if _, err := a.Seek(int64(m), io.SeekCurrent); err != nil {
-				t.Fatalf("lean Seek(+%d): %v", m, err)
+			{
+				_, err := a.Seek(int64(m), io.SeekCurrent)
+				require.NoErrorf(t, err, "lean Seek(+%d): %v", m, err)
 			}
 		}
-		if got, want := a.Cursor(), b.Cursor(); got != want {
-			t.Fatalf("after the token: lean cursor %+v, public cursor %+v", got, want)
+		{
+			got, want := a.Cursor(), b.Cursor()
+			require.Truef(t, got == want, "after the token: lean cursor %+v, public cursor %+v", got, want)
 		}
 		back := 0
 		if len(sizes) > 1 {
@@ -227,20 +228,21 @@ func leanTwin(t *testing.T, a, b *Reader, batch int, seed int64, advance bool) {
 		if back > 0 {
 			_, errA := a.Seek(int64(-back), io.SeekCurrent)
 			_, errB := b.Seek(int64(-back), io.SeekCurrent)
-			if errText(errA) != errText(errB) {
-				t.Fatalf("step back %d: lean %v, public %v", back, errA, errB)
-			}
+			require.Truef(t, errText(errA) == errText(errB), "step back %d: lean %v, public %v", back, errA, errB)
 		}
-		if got, want := a.Cursor(), b.Cursor(); got != want {
-			t.Fatalf("after the step back: lean cursor %+v, public cursor %+v", got, want)
+		{
+			got, want := a.Cursor(), b.Cursor()
+			require.Truef(t, got == want, "after the step back: lean cursor %+v, public cursor %+v", got, want)
 		}
 		_ = ca.Release()
 		_ = cb.Release()
-		if err := a.Remark(ca); err != nil {
-			t.Fatal(err)
+		{
+			err := a.Remark(ca)
+			require.NoError(t, err)
 		}
-		if err := b.Remark(cb); err != nil {
-			t.Fatal(err)
+		{
+			err := b.Remark(cb)
+			require.NoError(t, err)
 		}
 		skip, runes, sizes, partial, peeked = 0, 0, sizes[:0], false, peeked[:0]
 	}
@@ -248,14 +250,17 @@ func leanTwin(t *testing.T, a, b *Reader, batch int, seed int64, advance bool) {
 	// reset replays the token on both readers from its checkpoint.
 	reset := func() {
 		t.Helper()
-		if err := ca.Reset(); err != nil {
-			t.Fatal(err)
+		{
+			err := ca.Reset()
+			require.NoError(t, err)
 		}
-		if err := cb.Reset(); err != nil {
-			t.Fatal(err)
+		{
+			err := cb.Reset()
+			require.NoError(t, err)
 		}
-		if got, want := a.Cursor(), b.Cursor(); got != want {
-			t.Fatalf("after the reset: lean cursor %+v, public cursor %+v", got, want)
+		{
+			got, want := a.Cursor(), b.Cursor()
+			require.Truef(t, got == want, "after the reset: lean cursor %+v, public cursor %+v", got, want)
 		}
 		skip, runes, sizes, partial, peeked = 0, 0, sizes[:0], false, peeked[:0]
 	}
@@ -265,17 +270,14 @@ func leanTwin(t *testing.T, a, b *Reader, batch int, seed int64, advance bool) {
 
 		if errA != nil {
 			_, errB := b.ReadLocatedRune()
-			if errText(errA) != errText(errB) {
-				t.Fatalf("at skip %d: lean error %v, public error %v", skip, errA, errB)
-			}
+			require.Truef(t, errText(errA) == errText(errB), "at skip %d: lean error %v, public error %v", skip, errA, errB)
 			wantAt := atOf(b.Cursor(), skip)
-			if at != wantAt {
-				t.Fatalf("at skip %d with error %v: lean at %+v, want %+v", skip, errA, at, wantAt)
-			}
+			require.Truef(t, at == wantAt, "at skip %d with error %v: lean at %+v, want %+v", skip, errA, at, wantAt)
 			switch {
 			case errors.Is(errA, io.EOF):
-				if _, _, err := lean.Peek(skip, dst); !errors.Is(err, io.EOF) {
-					t.Fatalf("after the end: lean Peek returns %v, want io.EOF", err)
+				{
+					_, _, err := lean.Peek(skip, dst)
+					require.ErrorIsf(t, err, io.EOF, "after the end: lean Peek returns %v, want io.EOF", err)
 				}
 				commit()
 				return
@@ -290,33 +292,29 @@ func leanTwin(t *testing.T, a, b *Reader, batch int, seed int64, advance bool) {
 				// A source error is sticky on both readers.
 				_, _, errA2 := lean.Peek(skip, dst)
 				_, errB2 := b.ReadLocatedRune()
-				if errText(errA2) != errText(errB2) || errText(errA2) != errText(errA) {
-					t.Fatalf("repeated error: lean %v, public %v, first %v", errA2, errB2, errA)
-				}
+				require.Falsef(t, errText(errA2) != errText(errB2) || errText(errA2) != errText(errA), "repeated error: lean %v, public %v, first %v", errA2, errB2, errA)
 				return
 			}
 		}
 
-		if n < 1 || n > len(dst) {
-			t.Fatalf("Peek returned n = %d with a nil error", n)
-		}
+		require.Falsef(t, n < 1 || n > len(dst), "Peek returned n = %d with a nil error", n)
 		for k := 0; k < n; k++ {
 			lr, err := b.ReadLocatedRune()
 			if err != nil {
-				t.Fatalf("lean decoded %q, public read failed: %v", dst[k].Rune, err)
+				require.FailNowf(t, "unexpected test state", "lean decoded %q, public read failed: %v", dst[k].Rune, err)
 			}
 			if k == 0 {
 				if at.Partial && (dst[0].Rune != utf8.RuneError || dst[0].Size != 1) {
-					t.Fatalf("at skip %d: Partial with %q/%d, want U+FFFD of size 1", skip, dst[0].Rune, dst[0].Size)
+					require.FailNowf(t, "unexpected test state", "at skip %d: Partial with %q/%d, want U+FFFD of size 1", skip, dst[0].Rune, dst[0].Size)
 				}
 				partial = partial || at.Partial
 				at.Partial = false
 				if want := atOf(lr.Pos(), skip); at != want {
-					t.Fatalf("at skip %d: lean at %+v, want %+v (pos %+v)", skip, at, want, lr.Pos())
+					require.FailNowf(t, "unexpected test state", "at skip %d: lean at %+v, want %+v (pos %+v)", skip, at, want, lr.Pos())
 				}
 			}
 			if dst[k].Rune != lr.Rune() || dst[k].Size != lr.Size() {
-				t.Fatalf("rune %d: lean %q/%d, public %q/%d", runes, dst[k].Rune, dst[k].Size, lr.Rune(), lr.Size())
+				require.FailNowf(t, "unexpected test state", "rune %d: lean %q/%d, public %q/%d", runes, dst[k].Rune, dst[k].Size, lr.Rune(), lr.Size())
 			}
 			skip += dst[k].Size
 			sizes = append(sizes, dst[k].Size)
@@ -334,7 +332,7 @@ func leanTwin(t *testing.T, a, b *Reader, batch int, seed int64, advance bool) {
 			}
 		}
 	}
-	t.Fatal("no end of input after 10000 steps")
+	require.FailNow(t, "no end of input after 10000 steps")
 }
 
 // atOf is the leanread.At that Peek must report for a rune at pos. At skip 0
@@ -346,18 +344,22 @@ func atOf(pos Pos, skip int) leanread.At {
 // TestLeanOf checks that only a *Reader has the lean read path. A type that
 // embeds one keeps the public read path, so its own methods are called.
 func TestLeanOf(t *testing.T) {
-	if _, ok := leanread.Of(NewReader(strings.NewReader("a"))); !ok {
-		t.Error("leanread.Of(*Reader) = false")
+	{
+		_, ok := leanread.Of(NewReader(strings.NewReader("a")))
+		assert.True(t, ok, "leanread.Of(*Reader) = false")
 	}
 	type wrapped struct{ *Reader }
-	if _, ok := leanread.Of(wrapped{NewReader(strings.NewReader("a"))}); ok {
-		t.Error("leanread.Of(a type that embeds *Reader) = true")
+	{
+		_, ok := leanread.Of(wrapped{NewReader(strings.NewReader("a"))})
+		assert.False(t, ok, "leanread.Of(a type that embeds *Reader) = true")
 	}
-	if _, ok := leanread.Of((*Reader)(nil)); ok {
-		t.Error("leanread.Of(nil *Reader) = true")
+	{
+		_, ok := leanread.Of((*Reader)(nil))
+		assert.False(t, ok, "leanread.Of(nil *Reader) = true")
 	}
-	if _, ok := leanread.Of(nil); ok {
-		t.Error("leanread.Of(nil) = true")
+	{
+		_, ok := leanread.Of(nil)
+		assert.False(t, ok, "leanread.Of(nil) = true")
 	}
 }
 
@@ -366,8 +368,9 @@ func TestLeanOf(t *testing.T) {
 func TestLeanPeekDoesNotMove(t *testing.T) {
 	r := NewReader(strings.NewReader("ab\ncdefgh"))
 	lean, _ := leanread.Of(r)
-	if _, _, err := r.ReadRune(); err != nil {
-		t.Fatal(err)
+	{
+		_, _, err := r.ReadRune()
+		require.NoError(t, err)
 	}
 	before := r.Cursor()
 	c := r.Checkpoint()
@@ -375,28 +378,29 @@ func TestLeanPeekDoesNotMove(t *testing.T) {
 
 	dst := make([]leanread.Rune, 8)
 	n, at, err := lean.Peek(0, dst)
-	if err != nil || n < 2 {
-		t.Fatalf("Peek(0) = %d, %v; want at least 2 runes and nil", n, err)
-	}
+	require.Falsef(t, err != nil || n < 2, "Peek(0) = %d, %v; want at least 2 runes and nil", n, err)
 	if dst[0].Rune != 'b' || dst[1].Rune != '\n' {
-		t.Fatalf("Peek(0) decoded %q, %q; want 'b', '\\n'", dst[0].Rune, dst[1].Rune)
+		require.FailNowf(t, "unexpected test state", "Peek(0) decoded %q, %q; want 'b', '\\n'", dst[0].Rune, dst[1].Rune)
 	}
-	if at != (leanread.At{}) {
-		t.Errorf("Peek(0) at %+v, want neither the start of the stream nor of a line", at)
+	assert.Truef(t, at == (leanread.At{}), "Peek(0) at %+v, want neither the start of the stream nor of a line", at)
+	{
+		_, at, _ = lean.Peek(2, dst)
+		assert.Falsef(t, !at.LineStart || at.Start, "Peek(2) at %+v, want the start of a line", at)
 	}
-	if _, at, _ = lean.Peek(2, dst); !at.LineStart || at.Start {
-		t.Errorf("Peek(2) at %+v, want the start of a line", at)
+	{
+		got := r.Cursor()
+		assert.Truef(t, got == before, "Peek moved the cursor from %+v to %+v", before, got)
 	}
-	if got := r.Cursor(); got != before {
-		t.Errorf("Peek moved the cursor from %+v to %+v", before, got)
+	{
+		got := r.RetainedBytes()
+		assert.Truef(t, got == retained, "Peek changed the retained bytes from %d to %d", retained, got)
 	}
-	if got := r.RetainedBytes(); got != retained {
-		t.Errorf("Peek changed the retained bytes from %d to %d", retained, got)
+	{
+		err := c.Release()
+		require.NoError(t, err)
 	}
-	if err := c.Release(); err != nil {
-		t.Fatal(err)
-	}
-	if err := r.UnreadRune(); err != nil {
-		t.Errorf("UnreadRune after ReadRune and Peek: %v; Peek must not end the unread state", err)
+	{
+		err := r.UnreadRune()
+		assert.NoErrorf(t, err, "UnreadRune after ReadRune and Peek: %v; Peek must not end the unread state", err)
 	}
 }

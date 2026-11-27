@@ -9,6 +9,8 @@ import (
 	"testing/iotest"
 	"unicode"
 
+	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
 	"github.com/xiam/bytescan/cursor"
 )
 
@@ -290,12 +292,8 @@ func TestLeanReadPathMatchesPublic(t *testing.T) {
 
 				lean := NewWithCursorOptions(leanCur, src.opts...)
 				public := NewWithCursorOptions(publicCursor{publicCur}, src.opts...)
-				if lean.lean == nil {
-					t.Fatal("the scanner over a *cursor.Reader has no lean read path")
-				}
-				if public.lean != nil {
-					t.Fatal("the scanner over a wrapped cursor has the lean read path")
-				}
+				require.False(t, lean.lean == nil, "the scanner over a *cursor.Reader has no lean read path")
+				require.True(t, public.lean == nil, "the scanner over a wrapped cursor has the lean read path")
 
 				var leanLog, publicLog []Symbol
 				leanAddRules(lean, &leanLog)
@@ -304,24 +302,21 @@ func TestLeanReadPathMatchesPublic(t *testing.T) {
 				got := leanScan(lean, leanCur, src.seekBack)
 				want := leanScan(public, publicCur, src.seekBack)
 
-				if len(got) != len(want) {
-					t.Errorf("lean path: %d results, public path: %d", len(got), len(want))
-				}
+				assert.Truef(t, len(got) == len(want), "lean path: %d results, public path: %d", len(got), len(want))
 				for k := 0; k < min(len(got), len(want)); k++ {
 					if got[k] != want[k] {
-						t.Fatalf("result %d:\nlean   %+v\npublic %+v", k, got[k], want[k])
+						require.FailNowf(t, "unexpected test state", "result %d:\nlean   %+v\npublic %+v", k, got[k], want[k])
 					}
 				}
-				if len(leanLog) != len(publicLog) {
-					t.Fatalf("the rules were shown %d symbols on the lean path, %d on the public path", len(leanLog), len(publicLog))
-				}
+				require.Truef(t, len(leanLog) == len(publicLog), "the rules were shown %d symbols on the lean path, %d on the public path", len(leanLog), len(publicLog))
 				for k := range leanLog {
 					if leanLog[k] != publicLog[k] {
-						t.Fatalf("symbol %d: lean %+v, public %+v", k, leanLog[k], publicLog[k])
+						require.FailNowf(t, "unexpected test state", "symbol %d: lean %+v, public %+v", k, leanLog[k], publicLog[k])
 					}
 				}
-				if got, want := leanCur.Cursor(), publicCur.Cursor(); got != want {
-					t.Errorf("final cursor: lean %+v, public %+v", got, want)
+				{
+					got, want := leanCur.Cursor(), publicCur.Cursor()
+					assert.Truef(t, got == want, "final cursor: lean %+v, public %+v", got, want)
 				}
 			})
 		}
@@ -362,29 +357,26 @@ func TestLeanReadPathNoProgressAfterPeek(t *testing.T) {
 				} else {
 					sc = NewWithCursor(publicCursor{cur})
 				}
-				if (sc.lean != nil) != lean {
-					t.Fatalf("lean read path = %v, want %v", sc.lean != nil, lean)
-				}
+				require.Truef(t, (sc.lean != nil) == lean, "lean read path = %v, want %v", sc.lean != nil, lean)
 				sc.MustAddRule("ANY", leanRunRule(func(rune) bool { return true }))
 
-				if _, err := sc.Next(); !errors.Is(err, io.ErrNoProgress) {
-					t.Fatalf("first Next: %v, want io.ErrNoProgress", err)
+				{
+					_, err := sc.Next()
+					require.ErrorIsf(t, err, io.ErrNoProgress, "first Next: %v, want io.ErrNoProgress", err)
 				}
-				if got := cur.Cursor(); !got.IsStart() {
-					t.Fatalf("after the failed Next the cursor is at %+v, want the start", got)
+				{
+					got := cur.Cursor()
+					require.Truef(t, got.IsStart(), "after the failed Next the cursor is at %+v, want the start", got)
 				}
 				tok, la, err := sc.NextLookahead()
-				if err != nil {
-					t.Fatalf("retry: %v", err)
-				}
+				require.NoErrorf(t, err, "retry: %v", err)
 				if tok.Text() != "ab" || tok.Span().Start().ByteOffset() != 0 || tok.Span().End().ByteOffset() != 2 {
-					t.Fatalf("retry token %q %v, want \"ab\" over bytes 0 to 2", tok.Text(), tok.Span())
+					require.FailNowf(t, "unexpected test state", "retry token %q %v, want \"ab\" over bytes 0 to 2", tok.Text(), tok.Span())
 				}
-				if !la.ReadEnd || la.After != 0 {
-					t.Fatalf("retry lookahead %+v, want ReadEnd and After 0", la)
-				}
-				if _, err := sc.Next(); err != io.EOF {
-					t.Fatalf("after the token: %v, want io.EOF", err)
+				require.Falsef(t, !la.ReadEnd || la.After != 0, "retry lookahead %+v, want ReadEnd and After 0", la)
+				{
+					_, err := sc.Next()
+					require.Truef(t, err == io.EOF, "after the token: %v, want io.EOF", err)
 				}
 			})
 		}

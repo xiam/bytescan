@@ -77,7 +77,7 @@ func TestReadSplittingRuneKeepsCoordinates(t *testing.T) {
 	assert.Equal(t, 1, cur.Column(), "one rune column was read")
 
 	_, err = tr.Read(buf)
-	assert.True(t, errors.Is(err, io.EOF), "want EOF, got %v", err)
+	assert.ErrorIs(t, err, io.EOF, "want EOF, got %v", err)
 }
 
 // TestBulkReadKeepsSourceErrorAlongsideData covers the direct bulk-read path:

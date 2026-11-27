@@ -1,7 +1,6 @@
 package tests
 
 import (
-	"errors"
 	"fmt"
 	"io"
 	"slices"
@@ -114,15 +113,94 @@ func scanWhole(t *testing.T, input string) []string {
 // error.
 func drainMore(t *testing.T, src bytescan.Source) ([]string, error) {
 	t.Helper()
-	var out []string
+	res := drainMoreResult(src)
+	require.NoError(t, res.failure)
+	return res.tokens, res.err
+}
+
+type moreDrainResult struct {
+	tokens  []string
+	err     error // terminal scanner error, which callers may expect
+	failure error // invariant failure for the owning test goroutine
+}
+
+func drainMoreResult(src bytescan.Source) moreDrainResult {
+	var res moreDrainResult
 	for i := 0; ; i++ {
-		require.Less(t, i, 10000, "Next did not stop")
+		if i >= 10000 {
+			res.failure = fmt.Errorf("Next did not stop after %d calls", i)
+			return res
+		}
 		tok, err := src.Next()
 		if err != nil {
-			require.Nil(t, tok)
-			return out, err
+			res.err = err
+			if tok != nil {
+				res.failure = fmt.Errorf("Next returned token %v alongside error %v", tok, err)
+			}
+			return res
 		}
-		out = append(out, tokenLine(tok))
+		res.tokens = append(res.tokens, tokenLine(tok))
+	}
+}
+
+// drainMoreAsync always notifies its caller when the worker exits. Assertions
+// belong to the caller, including the check that the worker sent a result.
+func drainMoreAsync(src bytescan.Source) <-chan moreDrainResult {
+	done := make(chan moreDrainResult, 1)
+	go func() {
+		defer close(done)
+		done <- drainMoreResult(src)
+	}()
+	return done
+}
+
+type moreFailureSource struct {
+	tok   *bytescan.Token
+	err   error
+	calls int
+	limit int
+}
+
+func (s *moreFailureSource) Next() (*bytescan.Token, error) {
+	s.calls++
+	// A missing helper bound must fail the test without leaving a runaway worker.
+	if s.calls > s.limit {
+		return nil, io.EOF
+	}
+	return s.tok, s.err
+}
+
+// Both invariant failures must reach the owner through the same worker path
+// as the live-source test, rather than exiting before its result send.
+func TestDrainMoreWorkerFailureCompletion(t *testing.T) {
+	for _, tc := range []struct {
+		name    string
+		err     error
+		calls   int
+		failure string
+	}{
+		{"token with error", io.EOF, 1, "alongside error"},
+		{"no terminal error within bound", nil, 10000, "Next did not stop"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			src := &moreFailureSource{tok: bytescan.NewTokenFromString("A", "a", 0), err: tc.err, limit: tc.calls}
+			done := drainMoreAsync(src)
+			select {
+			case res, ok := <-done:
+				require.True(t, ok, "worker exited without a result")
+				require.ErrorContains(t, res.failure, tc.failure)
+				assert.True(t, res.err == tc.err, "terminal error identity")
+				assert.Equal(t, tc.calls, src.calls)
+				select {
+				case _, ok := <-done:
+					assert.False(t, ok, "worker sent an extra result")
+				case <-time.After(5 * time.Second):
+					require.FailNow(t, "worker did not close its completion channel")
+				}
+			case <-time.After(5 * time.Second):
+				require.FailNow(t, "worker did not report its invariant failure")
+			}
+		})
 	}
 }
 
@@ -292,8 +370,8 @@ func TestMoreInputDistinctSignal(t *testing.T) {
 		"streamtest.ErrCeiling":          streamtest.ErrCeiling,
 	}
 	for name, other := range others {
-		assert.False(t, errors.Is(bytescan.ErrMoreInput, other), "ErrMoreInput matches %s", name)
-		assert.False(t, errors.Is(other, bytescan.ErrMoreInput), "%s matches ErrMoreInput", name)
+		assert.NotErrorIs(t, bytescan.ErrMoreInput, other, "ErrMoreInput matches %s", name)
+		assert.NotErrorIs(t, other, bytescan.ErrMoreInput, "%s matches ErrMoreInput", name)
 	}
 
 	t.Run("returns without waiting", func(t *testing.T) {
@@ -302,17 +380,15 @@ func TestMoreInputDistinctSignal(t *testing.T) {
 		addMoreInputRules(sc, nil)
 		src.feed("say \"hel")
 
-		done := make(chan error, 1)
-		go func() {
-			_, err := drainMore(t, sc)
-			done <- err
-		}()
+		done := drainMoreAsync(sc)
 		select {
-		case err := <-done:
+		case res, ok := <-done:
+			require.True(t, ok, "worker exited without a result")
+			require.NoError(t, res.failure)
 			// The identity, not errors.Is: Next returns the value unwrapped.
-			assert.True(t, err == bytescan.ErrMoreInput, "got %v", err)
+			assert.True(t, res.err == bytescan.ErrMoreInput, "got %v", res.err)
 		case <-time.After(10 * time.Second):
-			t.Fatal("Next blocked on a source that returns ErrMoreInput")
+			require.FailNow(t, "Next blocked on a source that returns ErrMoreInput")
 		}
 	})
 

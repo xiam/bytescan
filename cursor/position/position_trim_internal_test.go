@@ -1,6 +1,10 @@
 package position
 
-import "testing"
+import (
+	"testing"
+
+	"github.com/stretchr/testify/require"
+)
 
 // TestTrimBeforeBoundsTable checks the table stays proportional to the kept
 // lines and that oversized backing storage is reclaimed.
@@ -11,13 +15,15 @@ func TestTrimBeforeBoundsTable(t *testing.T) {
 		p.Scan([]byte("\n"))
 		p.TrimBefore(p.offset - 100)
 
-		if n := len(p.bytesPerLine); n > 2*101+1 {
-			t.Fatalf("after %d lines the table holds %d entries", i+1, n)
+		{
+			n := len(p.bytesPerLine)
+			require.Falsef(t, n > 2*101+1, "after %d lines the table holds %d entries", i+1, n)
 		}
 	}
 
-	if c := cap(p.bytesPerLine); c > 4*202 {
-		t.Fatalf("table capacity %d is not bounded by the kept lines", c)
+	{
+		c := cap(p.bytesPerLine)
+		require.Falsef(t, c > 4*202, "table capacity %d is not bounded by the kept lines", c)
 	}
 
 	// Steady trimming reuses the storage: no allocation per trim.
@@ -27,9 +33,7 @@ func TestTrimBeforeBoundsTable(t *testing.T) {
 		}
 		p.TrimBefore(p.offset)
 	})
-	if allocs != 0 {
-		t.Fatalf("steady trimming allocates %v times per run", allocs)
-	}
+	require.Truef(t, allocs == 0, "steady trimming allocates %v times per run", allocs)
 
 	// A burst of lines grows the table. The trim right after it keeps the
 	// storage; the next trim, over a short table, reclaims it.
@@ -39,20 +43,24 @@ func TestTrimBeforeBoundsTable(t *testing.T) {
 	}
 	p.Scan(big)
 	p.TrimBefore(p.offset)
-	if n := len(p.bytesPerLine); n != 1 {
-		t.Fatalf("after a trim to the end the table has len %d", n)
+	{
+		n := len(p.bytesPerLine)
+		require.Truef(t, n == 1, "after a trim to the end the table has len %d", n)
 	}
 
 	p.Scan([]byte("\n\n"))
 	p.TrimBefore(p.offset)
 
-	if n, c := len(p.bytesPerLine), cap(p.bytesPerLine); n != 1 || c > 2*minTrimCap {
-		t.Fatalf("after the burst the table has len %d cap %d", n, c)
+	{
+		n, c := len(p.bytesPerLine), cap(p.bytesPerLine)
+		require.Falsef(t, n != 1 || c > 2*minTrimCap, "after the burst the table has len %d cap %d", n, c)
 	}
-	if n, c := len(p.runesPerLine), cap(p.runesPerLine); n != 1 || c > 2*minTrimCap {
-		t.Fatalf("after the burst the rune table has len %d cap %d", n, c)
+	{
+		n, c := len(p.runesPerLine), cap(p.runesPerLine)
+		require.Falsef(t, n != 1 || c > 2*minTrimCap, "after the burst the rune table has len %d cap %d", n, c)
 	}
-	if got, want := p.line(), 100000+100*101+(1<<16)+2+1; got != want {
-		t.Fatalf("line %d, want %d", got, want)
+	{
+		got, want := p.line(), 100000+100*101+(1<<16)+2+1
+		require.Truef(t, got == want, "line %d, want %d", got, want)
 	}
 }

@@ -8,6 +8,8 @@ import (
 	"testing"
 	"unicode"
 
+	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
 	"github.com/xiam/bytescan/cursor"
 	"github.com/xiam/bytescan/internal/leanread"
 )
@@ -48,9 +50,7 @@ func (r *carryRun) scanner() *Scanner {
 	} else {
 		sc = NewWithCursor(publicCursor{r.cur})
 	}
-	if (sc.lean != nil) != r.lean {
-		r.t.Fatalf("lean read path = %v, want %v", sc.lean != nil, r.lean)
-	}
+	require.Truef(r.t, (sc.lean != nil) == r.lean, "lean read path = %v, want %v", sc.lean != nil, r.lean)
 	carryAddRules(sc)
 	return sc
 }
@@ -87,9 +87,7 @@ func (r *carryRun) wantCarry(sc *Scanner) {
 	if !r.lean {
 		return
 	}
-	if carried(sc) == 0 {
-		r.t.Fatalf("step %d: the scanner carries no symbol", len(r.log))
-	}
+	require.Falsef(r.t, carried(sc) == 0, "step %d: the scanner carries no symbol", len(r.log))
 	r.carry++
 }
 
@@ -110,19 +108,16 @@ func runCarryScript(t *testing.T, newCursor func() *cursor.Reader, script func(r
 	public := newCarryRun(t, false, newCursor())
 	script(lean)
 	script(public)
-	if lean.carry == 0 {
-		t.Fatal("the script checked no carried symbol")
-	}
-	if len(lean.log) != len(public.log) {
-		t.Errorf("lean path: %d steps, public path: %d", len(lean.log), len(public.log))
-	}
+	require.False(t, lean.carry == 0, "the script checked no carried symbol")
+	assert.Truef(t, len(lean.log) == len(public.log), "lean path: %d steps, public path: %d", len(lean.log), len(public.log))
 	for i := 0; i < min(len(lean.log), len(public.log)); i++ {
 		if lean.log[i] != public.log[i] {
-			t.Fatalf("step %d:\nlean   %s\npublic %s", i, lean.log[i], public.log[i])
+			require.FailNowf(t, "unexpected test state", "step %d:\nlean   %s\npublic %s", i, lean.log[i], public.log[i])
 		}
 	}
-	if got, want := lean.cur.Cursor(), public.cur.Cursor(); got != want {
-		t.Errorf("final cursor: lean %+v, public %+v", got, want)
+	{
+		got, want := lean.cur.Cursor(), public.cur.Cursor()
+		assert.Truef(t, got == want, "final cursor: lean %+v, public %+v", got, want)
 	}
 }
 
@@ -153,7 +148,7 @@ func TestCarryModeSwitchBetweenTokens(t *testing.T) {
 						if release {
 							out.Release()
 							if carried(out) != 0 {
-								r.t.Fatalf("the released scanner carries %d symbols", carried(out))
+								require.FailNowf(r.t, "unexpected test state", "the released scanner carries %d symbols", carried(out))
 							}
 						}
 						active = 1 - active
@@ -185,15 +180,18 @@ func TestCarryCheckpointBetweenTokens(t *testing.T) {
 				r.log = append(r.log, fmt.Sprintf("read %q %v", lr.Rune(), err))
 			}
 			if i%4 == 3 {
-				if err := cp.Commit(); err != nil {
-					r.t.Fatal(err)
+				{
+					err := cp.Commit()
+					require.NoError(r.t, err)
 				}
 			} else {
-				if err := cp.Reset(); err != nil {
-					r.t.Fatal(err)
+				{
+					err := cp.Reset()
+					require.NoError(r.t, err)
 				}
-				if err := cp.Release(); err != nil {
-					r.t.Fatal(err)
+				{
+					err := cp.Release()
+					require.NoError(r.t, err)
 				}
 			}
 			if r.next(r.sc) == nil {
@@ -278,7 +276,7 @@ func TestCarryMoreInputAtTokenBoundary(t *testing.T) {
 				}
 				moreInput++
 				if r.lean && carried(r.sc) != 0 {
-					r.t.Fatalf("after ErrMoreInput the scanner carries %d symbols", carried(r.sc))
+					require.FailNowf(r.t, "unexpected test state", "after ErrMoreInput the scanner carries %d symbols", carried(r.sc))
 				}
 				r.log = append(r.log, fmt.Sprintf("more input at %+v", r.cur.Cursor()))
 				continue
@@ -289,9 +287,7 @@ func TestCarryMoreInputAtTokenBoundary(t *testing.T) {
 			}
 			r.log = append(r.log, fmt.Sprintf("%s %q %v %+v cursor %+v", tok.Type(), tok.Text(), tok.Span(), la, r.cur.Cursor()))
 		}
-		if moreInput == 0 {
-			r.t.Fatal("no call returned ErrMoreInput")
-		}
+		require.False(r.t, moreInput == 0, "no call returned ErrMoreInput")
 	})
 }
 
@@ -306,8 +302,9 @@ func TestCarryResetStartBetweenTokens(t *testing.T) {
 	}, func(r *carryRun) {
 		r.next(r.sc) // "abc", read past to a space
 		r.wantCarry(r.sc)
-		if err := r.cur.ResetStart(strings.NewReader("12#xyz qq"), cursor.Start{}); err != nil {
-			r.t.Fatal(err)
+		{
+			err := r.cur.ResetStart(strings.NewReader("12#xyz qq"), cursor.Start{})
+			require.NoError(r.t, err)
 		}
 		other := r.scanner()
 		r.next(other) // "12", which ends at offset 2
@@ -376,17 +373,20 @@ func TestCarryOlderCheckpointBetweenTokens(t *testing.T) {
 					sc = NewWithCursor(publicCursor{r.cur})
 				}
 				addRules(sc)
-				if _, err := r.cur.Seek(10, io.SeekStart); err != nil {
-					r.t.Fatal(err)
+				{
+					_, err := r.cur.Seek(10, io.SeekStart)
+					require.NoError(r.t, err)
 				}
 				r.next(sc) // "a"
 				r.wantCarry(sc)
-				if _, err := r.cur.Seek(0, io.SeekStart); err != nil {
-					r.t.Fatal(err)
+				{
+					_, err := r.cur.Seek(0, io.SeekStart)
+					require.NoError(r.t, err)
 				}
 				cp := r.cur.Checkpoint()
-				if _, err := r.cur.Seek(11, io.SeekStart); err != nil {
-					r.t.Fatal(err)
+				{
+					_, err := r.cur.Seek(11, io.SeekStart)
+					require.NoError(r.t, err)
 				}
 				r.next(sc)
 				_ = cp.Release()
@@ -424,9 +424,7 @@ func carryPeeks(t *testing.T, in string, drop bool) (string, int) {
 		if err == io.EOF {
 			return strings.Join(texts, "|"), counter.peeks
 		}
-		if err != nil {
-			t.Fatal(err)
-		}
+		require.NoError(t, err)
 		texts = append(texts, tok.Text())
 	}
 }
@@ -440,13 +438,7 @@ func TestCarryIsUsed(t *testing.T) {
 	in := "ab cd ef\n"
 	got, peeks := carryPeeks(t, in, false)
 	want, dropped := carryPeeks(t, in, true)
-	if got != want {
-		t.Fatalf("tokens %q, without the carry %q", got, want)
-	}
-	if peeks != 5 {
-		t.Errorf("%d Peeks with the carry, want 5", peeks)
-	}
-	if dropped <= peeks {
-		t.Errorf("%d Peeks without the carry, %d with it; want more without it", dropped, peeks)
-	}
+	require.Truef(t, got == want, "tokens %q, without the carry %q", got, want)
+	assert.Truef(t, peeks == 5, "%d Peeks with the carry, want 5", peeks)
+	assert.Falsef(t, dropped <= peeks, "%d Peeks without the carry, %d with it; want more without it", dropped, peeks)
 }

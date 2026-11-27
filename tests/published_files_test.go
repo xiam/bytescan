@@ -8,6 +8,9 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+
+	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
 )
 
 // internalHost is the host name of the internal tracker. It is built from
@@ -38,21 +41,17 @@ func TestPublishedFilesLinkNoInternalHost(t *testing.T) {
 	root := strings.TrimSpace(string(out))
 
 	tracked := gitNulList(t, root, nil, "ls-files", "-z")
-	if len(tracked) == 0 {
-		t.Fatal("git ls-files listed no file")
-	}
+	require.False(t, len(tracked) == 0, "git ls-files listed no file")
 
 	// `git check-attr -z` prints three fields for each path: the path, the
 	// attribute and its value.
 	attrs := gitNulList(t, root, []byte(strings.Join(tracked, "\x00")+"\x00"),
 		"check-attr", "-z", "--stdin", "export-ignore")
-	if len(attrs) != 3*len(tracked) {
-		t.Fatalf("git check-attr returned %d fields for %d files", len(attrs), len(tracked))
-	}
+	require.Truef(t, len(attrs) == 3*len(tracked), "git check-attr returned %d fields for %d files", len(attrs), len(tracked))
 	ignored := make(map[string]bool)
 	for i := 0; i < len(attrs); i += 3 {
 		if attrs[i+1] != "export-ignore" {
-			t.Fatalf("git check-attr returned attribute %q for %q", attrs[i+1], attrs[i])
+			require.FailNowf(t, "unexpected test state", "git check-attr returned attribute %q for %q", attrs[i+1], attrs[i])
 		}
 		if attrs[i+2] == "set" {
 			ignored[attrs[i]] = true
@@ -70,35 +69,29 @@ func TestPublishedFilesLinkNoInternalHost(t *testing.T) {
 		if errors.Is(err, os.ErrNotExist) {
 			continue // deleted in the working tree
 		}
-		if err != nil {
-			t.Fatalf("stat %s: %v", name, err)
-		}
+		require.NoErrorf(t, err, "stat %s: %v", name, err)
 		var data []byte
 		switch {
 		case info.Mode()&os.ModeSymlink != 0:
 			target, err := os.Readlink(path)
-			if err != nil {
-				t.Fatalf("readlink %s: %v", name, err)
-			}
+			require.NoErrorf(t, err, "readlink %s: %v", name, err)
 			data = []byte(target)
 		case info.IsDir():
 			continue // a submodule; git archive does not export its content
 		default:
-			if data, err = os.ReadFile(path); err != nil {
-				t.Fatalf("read %s: %v", name, err)
+			{
+				data, err = os.ReadFile(path)
+				require.NoErrorf(t, err, "read %s: %v", name, err)
 			}
 		}
 		scanned++
-		if n := bytes.Count(data, needle); n > 0 {
-			t.Errorf("%s is published and names the internal host %d times", name, n)
+		{
+			n := bytes.Count(data, needle)
+			assert.Falsef(t, n > 0, "%s is published and names the internal host %d times", name, n)
 		}
 	}
-	if scanned == 0 {
-		t.Fatal("no published file was scanned")
-	}
-	if ignored["go.mod"] {
-		t.Fatal("go.mod is marked export-ignore; the export rule is not the one this test expects")
-	}
+	require.False(t, scanned == 0, "no published file was scanned")
+	require.False(t, ignored["go.mod"], "go.mod is marked export-ignore; the export rule is not the one this test expects")
 	t.Logf("scanned %d published files; %d tracked files are export-ignore", scanned, len(ignored))
 }
 
@@ -114,7 +107,7 @@ func gitNulList(t *testing.T, dir string, stdin []byte, args ...string) []string
 	cmd.Stderr = &stderr
 	out, err := cmd.Output()
 	if err != nil {
-		t.Fatalf("git %s: %v: %s", strings.Join(args, " "), err, stderr.String())
+		require.FailNowf(t, "unexpected test state", "git %s: %v: %s", strings.Join(args, " "), err, stderr.String())
 	}
 	out = bytes.TrimSuffix(out, []byte{0})
 	if len(out) == 0 {

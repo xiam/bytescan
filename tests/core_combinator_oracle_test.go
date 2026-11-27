@@ -1,7 +1,6 @@
 package tests
 
 import (
-	"errors"
 	"io"
 	"regexp"
 	"strings"
@@ -153,7 +152,7 @@ func TestCoreCombinatorsMatchRegexpOracle(t *testing.T) {
 				if got != want {
 					mismatches++
 					if mismatches <= 5 {
-						t.Errorf("on %q the first match is %q, want %q", input, got, want)
+						assert.Failf(t, "mismatch", "on %q the first match is %q, want %q", input, got, want)
 					}
 				}
 			}
@@ -162,7 +161,7 @@ func TestCoreCombinatorsMatchRegexpOracle(t *testing.T) {
 			lx := bytescan.New(strings.NewReader(""))
 			lx.MustAddRule(lexTypeR, row.rule)
 			lex, err := lx.Next()
-			assert.True(t, errors.Is(err, io.EOF), "Next on empty input: %v", err)
+			assert.ErrorIs(t, err, io.EOF, "Next on empty input: %v", err)
 			assert.Nil(t, lex)
 
 			assert.True(t, matched, "row has no matching input")

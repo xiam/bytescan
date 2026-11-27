@@ -203,6 +203,14 @@ func differentialSets() []tableSet {
 // scanner returns bytescan.ErrMoreInput.
 func traceSet(t testing.TB, ts tableSet, engine bool, parts ...string) []string {
 	t.Helper()
+	lines, err := traceSetResult(ts, engine, parts...)
+	require.NoError(t, err)
+	return lines
+}
+
+// traceSetResult keeps helper failures separate from the recorded scanner
+// errors. Workers return its error to the owning test before any assertion.
+func traceSetResult(ts tableSet, engine bool, parts ...string) ([]string, error) {
 	defer core.SetEngineForced(engine)()
 
 	src := &partSource{}
@@ -233,12 +241,12 @@ func traceSet(t testing.TB, ts tableSet, engine bool, parts ...string) []string 
 				if errors.Is(err, bytescan.ErrMoreInput) && i < len(parts) {
 					break
 				}
-				return lines
+				return lines, nil
 			}
 			lines = append(lines, fmt.Sprintf("%s %q offset %d byte %d rune %d span %v line %d column %d after %d end %v",
 				tok.Type(), tok.Text(), tok.Offset(), tok.ByteOffset(), tok.RuneOffset(), tok.Span(), tok.Line(), tok.Column(), la.After, la.ReadEnd))
 			if len(lines) > 4*len(strings.Join(parts, ""))+8 {
-				t.Fatalf("set %s: too many tokens", ts.name)
+				return lines, fmt.Errorf("set %s: too many tokens", ts.name)
 			}
 		}
 	}
@@ -272,8 +280,7 @@ func compareSet(t testing.TB, ts tableSet, parts ...string) bool {
 	if strings.Join(want, "\n") == strings.Join(got, "\n") {
 		return true
 	}
-	t.Errorf("set %s, input %q: the table and the engine differ\nengine:\n  %s\ntable:\n  %s",
-		ts.name, parts, strings.Join(want, "\n  "), strings.Join(got, "\n  "))
+	assert.Failf(t, "unexpected test state", "set %s, input %q: the table and the engine differ\nengine:\n  %s\ntable:\n  %s", ts.name, parts, strings.Join(want, "\n  "), strings.Join(got, "\n  "))
 	return false
 }
 
@@ -479,15 +486,17 @@ func TestTabledRuleReuse(t *testing.T) {
 	t.Run("shared by concurrent scanners", func(t *testing.T) {
 		var wg sync.WaitGroup
 		got := make([][]string, 8)
+		errs := make([]error, len(got))
 		for i := range got {
 			wg.Add(1)
 			go func(i int) {
 				defer wg.Done()
-				got[i] = traceSet(t, set, false, input)
+				got[i], errs[i] = traceSetResult(set, false, input)
 			}(i)
 		}
 		wg.Wait()
 		for i := range got {
+			require.NoError(t, errs[i], "scanner %d", i)
 			assert.Equal(t, want, got[i], "scanner %d", i)
 		}
 	})
@@ -690,11 +699,10 @@ func TestTableCacheBounded(t *testing.T) {
 			s := bytescan.NewSymbol(c, bytescan.FlagNone)
 			for _, rule := range []bytescan.Rule{start, run} {
 				next, state := rule(s)
-				if next == nil || state != bytescan.StateAccept {
-					t.Fatalf("rune %U: %v, %v, want a Rule value and accept", c, next != nil, state)
-				}
-				if _, again := next(bytescan.NewSymbol(bytescan.RuneEOF, bytescan.FlagEOF)); again != bytescan.StateReject {
-					t.Fatalf("rune %U, then EOF: %v, want reject", c, again)
+				require.Falsef(t, next == nil || state != bytescan.StateAccept, "rune %U: %v, %v, want a Rule value and accept", c, next != nil, state)
+				{
+					_, again := next(bytescan.NewSymbol(bytescan.RuneEOF, bytescan.FlagEOF))
+					require.Truef(t, again == bytescan.StateReject, "rune %U, then EOF: %v, want reject", c, again)
 				}
 			}
 		}
@@ -743,15 +751,17 @@ func TestTableCacheConcurrent(t *testing.T) {
 
 	var wg sync.WaitGroup
 	got := make([][]string, 8)
+	errs := make([]error, len(got))
 	for i := range got {
 		wg.Add(1)
 		go func(i int) {
 			defer wg.Done()
-			got[i] = traceSet(t, set, false, input)
+			got[i], errs[i] = traceSetResult(set, false, input)
 		}(i)
 	}
 	wg.Wait()
 	for i := range got {
+		require.NoError(t, errs[i], "scanner %d", i)
 		assert.Equal(t, want, got[i], "scanner %d", i)
 	}
 }

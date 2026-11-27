@@ -4,6 +4,7 @@ import (
 	"flag"
 	"testing"
 
+	"github.com/stretchr/testify/require"
 	"github.com/xiam/bytescan/streamtest"
 )
 
@@ -16,24 +17,22 @@ var long = flag.Bool("long", false, "a -long flag of the importing test")
 // -streamtest.long, and only it, selects LongBudget.
 func TestFlag(t *testing.T) {
 	f := flag.Lookup("streamtest.long")
-	if f == nil {
-		t.Fatal("the -streamtest.long flag is not registered")
-	}
+	require.False(t, f == nil, "the -streamtest.long flag is not registered")
 	if *long || streamtest.Long() {
 		t.Skip("run without -long and -streamtest.long")
 	}
-	if err := flag.Set("long", "true"); err != nil {
-		t.Fatal(err)
+	{
+		err := flag.Set("long", "true")
+		require.NoError(t, err)
 	}
 	t.Cleanup(func() { flag.Set("long", "false") })
-	if streamtest.Long() || streamtest.DefaultBudget() == streamtest.LongBudget {
-		t.Fatal("the importing test's -long flag selected the long budget")
-	}
-	if err := flag.Set("streamtest.long", "true"); err != nil {
-		t.Fatal(err)
+	require.False(t, streamtest.Long() || streamtest.DefaultBudget() == streamtest.LongBudget, "the importing test's -long flag selected the long budget")
+	{
+		err := flag.Set("streamtest.long", "true")
+		require.NoError(t, err)
 	}
 	t.Cleanup(func() { flag.Set("streamtest.long", "false") })
 	if !streamtest.Long() || streamtest.DefaultBudget() != streamtest.LongBudget {
-		t.Fatalf("with -streamtest.long, DefaultBudget is %d, want %d", streamtest.DefaultBudget(), streamtest.LongBudget)
+		require.FailNowf(t, "unexpected test state", "with -streamtest.long, DefaultBudget is %d, want %d", streamtest.DefaultBudget(), streamtest.LongBudget)
 	}
 }

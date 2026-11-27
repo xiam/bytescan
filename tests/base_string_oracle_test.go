@@ -115,7 +115,7 @@ func TestBaseEscapedRunOpenerOracle(t *testing.T) {
 				if got != want {
 					mismatches++
 					if mismatches <= 5 {
-						t.Errorf("on %q the first match is %q, want %q", input, got, want)
+						assert.Failf(t, "mismatch", "on %q the first match is %q, want %q", input, got, want)
 					}
 				}
 			}

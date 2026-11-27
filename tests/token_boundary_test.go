@@ -89,7 +89,7 @@ func (r *boundaryRun) drain(sc *bytescan.Scanner) error {
 			return err
 		}
 	}
-	r.t.Fatal("drain: no error after 1000 tokens")
+	require.FailNow(r.t, "drain: no error after 1000 tokens")
 	return nil
 }
 

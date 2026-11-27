@@ -8,7 +8,6 @@ import (
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
-
 	"github.com/xiam/bytescan"
 	"github.com/xiam/bytescan/cursor"
 	"github.com/xiam/bytescan/modes"
@@ -193,7 +192,7 @@ func TestDriverConcurrentNext(t *testing.T) {
 					return
 				}
 				if err != nil {
-					t.Error(err)
+					assert.NoError(t, err)
 					return
 				}
 				mu.Lock()

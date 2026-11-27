@@ -11,6 +11,8 @@ import (
 	"testing"
 	"time"
 
+	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
 	"github.com/xiam/bytescan"
 	"github.com/xiam/bytescan/bytesource"
 	"github.com/xiam/bytescan/cursor"
@@ -232,9 +234,7 @@ func soakLimitsFromFlag(t *testing.T) soakLimits {
 	}{{"GiB", 30}, {"MiB", 20}, {"KiB", 10}} {
 		if num, ok := strings.CutSuffix(v, u.suffix); ok {
 			n, err := strconv.ParseInt(num, 10, 64)
-			if err != nil || n <= 0 {
-				t.Fatalf("-soak=%s: bad size", v)
-			}
+			require.Falsef(t, err != nil || n <= 0, "-soak=%s: bad size", v)
 			l.bytes = n << u.shift
 			return l
 		}
@@ -244,9 +244,7 @@ func soakLimitsFromFlag(t *testing.T) soakLimits {
 		return l
 	}
 	d, err := time.ParseDuration(v)
-	if err != nil || d <= 0 {
-		t.Fatalf("-soak=%s: want a duration (30m) or a size (1GiB)", v)
-	}
+	require.Falsef(t, err != nil || d <= 0, "-soak=%s: want a duration (30m) or a size (1GiB)", v)
 	l.dur = d
 	return l
 }
@@ -499,7 +497,7 @@ func runSoakWorkload(t *testing.T, name string, build func() *soakWorkload) {
 	res := runSoak(t, build, limits, soakCheckNone)
 	logSoak(t, name, res, limits.long)
 	for _, f := range res.failures {
-		t.Errorf("%s: %s: %s", name, f.check, f.msg)
+		assert.Failf(t, "unexpected test state", "%s: %s: %s", name, f.check, f.msg)
 	}
 }
 
@@ -802,9 +800,7 @@ func TestSoakLeakVariants(t *testing.T) {
 			})
 			res := runSoak(t, func() *soakWorkload { return newSoakByteStream(t, tc.leak) }, soakDefaultLimits(), tc.check)
 			logSoak(t, tc.name, res, false)
-			if !res.failed(tc.check) {
-				t.Fatalf("the %s check did not fail", tc.check)
-			}
+			require.Truef(t, res.failed(tc.check), "the %s check did not fail", tc.check)
 			for _, f := range res.failures {
 				t.Logf("expected failure: %s: %s", f.check, f.msg)
 			}

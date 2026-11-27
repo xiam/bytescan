@@ -341,7 +341,7 @@ func TestCoreMatchesRegexpOracle(t *testing.T) {
 				lx.MustAddRule(lexTypeR, row.rule)
 
 				lex, err := lx.Next()
-				assert.True(t, errors.Is(err, io.EOF), "Next on empty input: %v", err)
+				assert.ErrorIs(t, err, io.EOF, "Next on empty input: %v", err)
 				assert.Nil(t, lex)
 			})
 
@@ -412,8 +412,9 @@ func TestCoreClassesMatchRegexpOracle(t *testing.T) {
 		t.Run(row.expr, func(t *testing.T) {
 			re := regexp.MustCompile(`\A` + row.expr + `\z`)
 			for _, r := range runes {
-				if want := re.MatchString(string(r)); row.class(r) != want {
-					t.Errorf("class(%U) = %v, want %v", r, !want, want)
+				{
+					want := re.MatchString(string(r))
+					assert.Truef(t, row.class(r) == want, "class(%U) = %v, want %v", r, !want, want)
 				}
 			}
 		})

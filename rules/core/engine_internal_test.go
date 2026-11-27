@@ -7,8 +7,8 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
-
 	"github.com/xiam/bytescan"
 )
 
@@ -351,13 +351,11 @@ func TestEngineMatchesReference(t *testing.T) {
 				if got := firstMatch(t, row.rule, input); got != want {
 					mismatches++
 					if mismatches <= 5 {
-						t.Errorf("on %q the first match has %d runes, want %d", input, got, want)
+						assert.Failf(t, "mismatch", "on %q the first match has %d runes, want %d", input, got, want)
 					}
 				}
 			}
-			if mismatches > 5 {
-				t.Errorf("%d mismatches in all", mismatches)
-			}
+			assert.Falsef(t, mismatches > 5, "%d mismatches in all", mismatches)
 		})
 	}
 }

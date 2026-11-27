@@ -11,6 +11,9 @@ import (
 	"strings"
 	"testing"
 	"time"
+
+	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
 )
 
 // checkedBenchstat is the benchstat version that the expectations of
@@ -27,8 +30,9 @@ func writeSamples(t *testing.T, dir string, l Lane, ns []float64) string {
 		fmt.Fprintf(&b, "BenchmarkCase/json-12 \t       1\t%.0f ns/op\t     100 B/op\t       3 allocs/op\n", v)
 	}
 	path := filepath.Join(dir, string(l)+".txt")
-	if err := os.WriteFile(path, b.Bytes(), 0o644); err != nil {
-		t.Fatal(err)
+	{
+		err := os.WriteFile(path, b.Bytes(), 0o644)
+		require.NoError(t, err)
 	}
 	return path
 }
@@ -48,9 +52,7 @@ func benchstatOrSkip(t *testing.T) {
 	}
 	goCmd := filepath.Join(runtime.GOROOT(), "bin", "go")
 	v, err := benchstatVersion(goCmd)
-	if err != nil {
-		t.Fatal(err)
-	}
+	require.NoError(t, err)
 	t.Logf("benchstat %s; the expectations were checked against %s", v, checkedBenchstat)
 }
 
@@ -69,35 +71,35 @@ func TestSkewedSample(t *testing.T) {
 	for _, v := range skewed {
 		sum += v
 	}
-	if mean := sum / float64(len(skewed)); mean != 5950 {
-		t.Fatalf("the mean of the fixture is %v, want 5950", mean)
+	{
+		mean := sum / float64(len(skewed))
+		require.Truef(t, mean == 5950, "the mean of the fixture is %v, want 5950", mean)
 	}
 	cmp, err := benchstat(writeSamples(t, dir, Control, skewed), writeSamples(t, dir, Wrapped, repeat(1000, 20)))
-	if err != nil {
-		t.Fatal(err)
-	}
+	require.NoError(t, err)
 	got := cmp.first[unitTime]
-	if math.Abs(got.Median-1000e-9) > 1e-15 {
-		t.Errorf("median = %v s, want 1e-06 s (the median, not the mean of 5.95e-06 s)", got.Median)
+	assert.Falsef(t, math.Abs(got.Median-1000e-9) > 1e-15, "median = %v s, want 1e-06 s (the median, not the mean of 5.95e-06 s)", got.Median)
+	assert.Falsef(t, !got.Bounded || got.Spread != 0, "spread = %+v, want a bounded interval of 0 percent", got)
+	{
+		r := reportedSpread(got)
+		assert.Truef(t, r == 5, "reported spread = %v, want the floor of 5 percent", r)
 	}
-	if !got.Bounded || got.Spread != 0 {
-		t.Errorf("spread = %+v, want a bounded interval of 0 percent", got)
+	{
+		s := formatSpread(got)
+		assert.Truef(t, s == "± 5 % (CI ± 0 %)", "formatSpread = %q, want %q", s, "± 5 % (CI ± 0 %)")
 	}
-	if r := reportedSpread(got); r != 5 {
-		t.Errorf("reported spread = %v, want the floor of 5 percent", r)
+	{
+		d := cmp.delta[unitTime]
+		assert.Falsef(t, d.Significant || d.N != [2]int{20, 20}, "delta = %+v, want not significant with 20 and 20 samples", d)
 	}
-	if s := formatSpread(got); s != "± 5 % (CI ± 0 %)" {
-		t.Errorf("formatSpread = %q, want %q", s, "± 5 % (CI ± 0 %)")
-	}
-	if d := cmp.delta[unitTime]; d.Significant || d.N != [2]int{20, 20} {
-		t.Errorf("delta = %+v, want not significant with 20 and 20 samples", d)
-	}
-	if s := formatDelta(cmp.delta[unitTime]); s != "not significant" {
-		t.Errorf("formatDelta = %q, want not significant", s)
+	{
+		s := formatDelta(cmp.delta[unitTime])
+		assert.Truef(t, s == "not significant", "formatDelta = %q, want not significant", s)
 	}
 	lanes := map[Lane]map[string]stat{Control: cmp.first, Wrapped: cmp.second, Instrumented: cmp.second}
-	if status, ok := decide(lanes, nil, false); !ok || status != conclusive {
-		t.Errorf("decide = %q, %v, want conclusive", status, ok)
+	{
+		status, ok := decide(lanes, nil, false)
+		assert.Falsef(t, !ok || status != conclusive, "decide = %q, %v, want conclusive", status, ok)
 	}
 
 	md := render(t, lanes, cmp.delta[unitTime], conclusive)
@@ -108,35 +110,27 @@ func TestSkewedSample(t *testing.T) {
 		"The report gives no arithmetic mean.",
 		"This is a check of the procedure, not a statistical guarantee.",
 	} {
-		if !strings.Contains(md, want) {
-			t.Errorf("the report has no %q:\n%s", want, md)
-		}
+		assert.Truef(t, strings.Contains(md, want), "the report has no %q:\n%s", want, md)
 	}
-	if strings.Contains(strings.ReplaceAll(md, "The report gives no arithmetic mean.", ""), "mean") {
-		t.Errorf("the report names a mean:\n%s", md)
-	}
+	assert.Falsef(t, strings.Contains(strings.ReplaceAll(md, "The report gives no arithmetic mean.", ""), "mean"), "the report names a mean:\n%s", md)
 
 	// A wide sample: the spread is above the limit.
 	wide := []float64{800, 900, 1000, 1100, 1200, 1300, 700, 1400, 950, 1050}
 	cmp, err = benchstat(writeSamples(t, dir, Control, wide), writeSamples(t, dir, Wrapped, repeat(1000, 10)))
-	if err != nil {
-		t.Fatal(err)
-	}
-	if s := cmp.first[unitTime]; !s.Bounded || s.Spread <= spreadLimit || !aboveLimit(s) {
-		t.Errorf("spread of the wide sample = %+v, want above %v percent", s, spreadLimit)
+	require.NoError(t, err)
+	{
+		s := cmp.first[unitTime]
+		assert.Falsef(t, !s.Bounded || s.Spread <= spreadLimit || !aboveLimit(s), "spread of the wide sample = %+v, want above %v percent", s, spreadLimit)
 	}
 	lanes = map[Lane]map[string]stat{Control: cmp.first, Wrapped: cmp.second, Instrumented: cmp.second}
-	if _, ok := decide(lanes, nil, false); ok {
-		t.Errorf("decide before the rerun: ok, want a rerun")
+	{
+		_, ok := decide(lanes, nil, false)
+		assert.Falsef(t, ok, "decide before the rerun: ok, want a rerun")
 	}
 	status, ok := decide(lanes, nil, true)
-	if !ok || status != inconclusive {
-		t.Errorf("decide after the rerun = %q, %v, want inconclusive", status, ok)
-	}
+	assert.Falsef(t, !ok || status != inconclusive, "decide after the rerun = %q, %v, want inconclusive", status, ok)
 	md = render(t, lanes, cmp.delta[unitTime], status)
-	if !strings.Contains(md, "Headline: inconclusive") || strings.Contains(md, "MB/s") {
-		t.Errorf("an inconclusive case shows a rate:\n%s", md)
-	}
+	assert.Falsef(t, !strings.Contains(md, "Headline: inconclusive") || strings.Contains(md, "MB/s"), "an inconclusive case shows a rate:\n%s", md)
 }
 
 // render writes a report of one json case with the summaries of lanes. Each
@@ -159,8 +153,9 @@ func render(t *testing.T, lanes map[Lane]map[string]stat, cost delta, status cas
 	r.cases[0].wrapped.Counts.Bytes = 4880944
 	r.cases[0].wrapped.Counts.Reads = 100
 	var b bytes.Buffer
-	if err := r.WriteMarkdown(&b); err != nil {
-		t.Fatal(err)
+	{
+		err := r.WriteMarkdown(&b)
+		require.NoError(t, err)
 	}
 	return b.String()
 }
@@ -168,11 +163,13 @@ func render(t *testing.T, lanes map[Lane]map[string]stat, cost delta, status cas
 // TestDeltaNeverZero checks that a cost that benchstat reports as not
 // significant is "not significant", never zero.
 func TestDeltaNeverZero(t *testing.T) {
-	if s := formatDelta(delta{}); s != "not significant" {
-		t.Errorf("formatDelta(not significant) = %q", s)
+	{
+		s := formatDelta(delta{})
+		assert.Truef(t, s == "not significant", "formatDelta(not significant) = %q", s)
 	}
-	if s := formatDelta(delta{Percent: 1.5, Significant: true}); s != "+1.50 %" {
-		t.Errorf("formatDelta(+1.5) = %q", s)
+	{
+		s := formatDelta(delta{Percent: 1.5, Significant: true})
+		assert.Truef(t, s == "+1.50 %", "formatDelta(+1.5) = %q", s)
 	}
 }
 
@@ -182,13 +179,9 @@ func TestDeltaNeverZero(t *testing.T) {
 // of every row.
 func TestReportHasEveryFieldOfTheFormat(t *testing.T) {
 	spec, err := os.ReadFile(filepath.Join("..", "..", "docs", "specs", "measurement.md"))
-	if err != nil {
-		t.Fatal(err)
-	}
+	require.NoError(t, err)
 	_, example, ok := strings.Cut(string(spec), "### A filled example")
-	if !ok {
-		t.Fatal("the contract has no filled example")
-	}
+	require.True(t, ok, "the contract has no filled example")
 	_, example, _ = strings.Cut(example, "```markdown\n")
 	example, _, _ = strings.Cut(example, "```")
 
@@ -204,16 +197,10 @@ func TestReportHasEveryFieldOfTheFormat(t *testing.T) {
 		rows++
 		cells := strings.Split(line, "|")
 		first := "| " + strings.TrimSpace(cells[1]) + " |"
-		if !strings.Contains(md, "\n"+first) {
-			t.Errorf("the report has no row %q", first)
-		}
-		if !strings.Contains(line, "‹") && !strings.Contains(md, line) {
-			t.Errorf("the report has no line %q", line)
-		}
+		assert.Truef(t, strings.Contains(md, "\n"+first), "the report has no row %q", first)
+		assert.Falsef(t, !strings.Contains(line, "‹") && !strings.Contains(md, line), "the report has no line %q", line)
 	}
-	if rows < 33 {
-		t.Fatalf("read %d rows of the example, want the five tables", rows)
-	}
+	require.Falsef(t, rows < 33, "read %d rows of the example, want the five tables", rows)
 }
 
 // TestSpreadFloor checks the resolution floor of the reported spread (owner
@@ -234,18 +221,22 @@ func TestSpreadFloor(t *testing.T) {
 	}
 	for _, c := range cases {
 		s := stat{Median: 1, Spread: c.ci, Bounded: true}
-		if got := reportedSpread(s); got != c.reported {
-			t.Errorf("CI %v: reported spread %v, want %v", c.ci, got, c.reported)
+		{
+			got := reportedSpread(s)
+			assert.Truef(t, got == c.reported, "CI %v: reported spread %v, want %v", c.ci, got, c.reported)
 		}
-		if got := formatSpread(s); got != c.label {
-			t.Errorf("CI %v: label %q, want %q", c.ci, got, c.label)
+		{
+			got := formatSpread(s)
+			assert.Truef(t, got == c.label, "CI %v: label %q, want %q", c.ci, got, c.label)
 		}
-		if got := aboveLimit(s); got != c.above {
-			t.Errorf("CI %v: above the limit %v, want %v", c.ci, got, c.above)
+		{
+			got := aboveLimit(s)
+			assert.Truef(t, got == c.above, "CI %v: above the limit %v, want %v", c.ci, got, c.above)
 		}
 	}
-	if got := formatSpread(stat{Median: 1}); got != "no interval (∞)" {
-		t.Errorf("no interval: label %q", got)
+	{
+		got := formatSpread(stat{Median: 1})
+		assert.Truef(t, got == "no interval (∞)", "no interval: label %q", got)
 	}
 }
 
@@ -262,28 +253,30 @@ func TestReferenceSummary(t *testing.T) {
 		fmt.Fprintf(&b, "BenchmarkReference/json/regexp-12 \t       1\t%d ns/op\t     200 B/op\t       4 allocs/op\n", 2000)
 	}
 	path := filepath.Join(dir, "json-ref-regexp.txt")
-	if err := os.WriteFile(path, b.Bytes(), 0o644); err != nil {
-		t.Fatal(err)
+	{
+		err := os.WriteFile(path, b.Bytes(), 0o644)
+		require.NoError(t, err)
 	}
 	sum, err := summary(path)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if got := sum[unitTime]; math.Abs(got.Median-2000e-9) > 1e-15 || !got.Bounded || got.Spread != 0 {
-		t.Errorf("time = %+v, want a median of 2 µs and an interval of 0 percent", got)
+	require.NoError(t, err)
+	{
+		got := sum[unitTime]
+		assert.Falsef(t, math.Abs(got.Median-2000e-9) > 1e-15 || !got.Bounded || got.Spread != 0, "time = %+v, want a median of 2 µs and an interval of 0 percent", got)
 	}
 	if sum[unitBytes].Median != 200 || sum[unitAllocs].Median != 4 {
-		t.Errorf("B/op %v, allocs/op %v, want 200 and 4", sum[unitBytes].Median, sum[unitAllocs].Median)
+		assert.Failf(t, "unexpected test state", "B/op %v, allocs/op %v, want 200 and 4", sum[unitBytes].Median, sum[unitAllocs].Median)
 	}
 
 	ok := map[string]stat{unitTime: {Median: 1, Spread: 1, Bounded: true}}
 	wide := map[string]stat{unitTime: {Median: 1, Spread: 9, Bounded: true}}
 	lanes := map[Lane]map[string]stat{Control: ok, Wrapped: ok, Instrumented: ok}
-	if _, done := decide(lanes, map[tool]map[string]stat{textScanner: ok, regexpLexer: wide}, false); done {
-		t.Errorf("decide with a wide reference: done, want a rerun")
+	{
+		_, done := decide(lanes, map[tool]map[string]stat{textScanner: ok, regexpLexer: wide}, false)
+		assert.Falsef(t, done, "decide with a wide reference: done, want a rerun")
 	}
-	if status, _ := decide(lanes, map[tool]map[string]stat{regexpLexer: wide}, true); status != inconclusive {
-		t.Errorf("decide after the rerun = %q, want inconclusive", status)
+	{
+		status, _ := decide(lanes, map[tool]map[string]stat{regexpLexer: wide}, true)
+		assert.Truef(t, status == inconclusive, "decide after the rerun = %q, want inconclusive", status)
 	}
 
 	md := render(t, map[Lane]map[string]stat{Control: sum, Wrapped: sum, Instrumented: sum}, delta{}, conclusive)
@@ -294,8 +287,6 @@ func TestReferenceSummary(t *testing.T) {
 		referenceNotes,
 		"The Tokens column counts returned decoder events.",
 	} {
-		if !strings.Contains(md, want) {
-			t.Errorf("the report has no %q:\n%s", want, md)
-		}
+		assert.Truef(t, strings.Contains(md, want), "the report has no %q:\n%s", want, md)
 	}
 }

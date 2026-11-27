@@ -3,28 +3,22 @@ package bench
 import (
 	"encoding/json"
 	"testing"
+
+	"github.com/stretchr/testify/require"
 )
 
 func TestLongJSONCase(t *testing.T) {
 	c, ok := findCase("longjson")
-	if !ok {
-		t.Fatal("longjson case is missing")
-	}
+	require.True(t, ok, "longjson case is missing")
 	in := input(t, c)
-	if !json.Valid(in) {
-		t.Fatal("longjson input is invalid JSON")
-	}
+	require.True(t, json.Valid(in), "longjson input is invalid JSON")
 	l := Control
 	if tagged() {
 		l = Instrumented
 	}
 	res, err := lex(c, l, in, nop, nop)
-	if err != nil {
-		t.Fatal(err)
-	}
+	require.NoError(t, err)
 	// Nine tokens per object, one comma between objects, and two brackets.
 	const want = 512*9 + 511 + 2
-	if res.Tokens != want {
-		t.Fatalf("longjson: got %d tokens, want %d", res.Tokens, want)
-	}
+	require.Truef(t, res.Tokens == want, "longjson: got %d tokens, want %d", res.Tokens, want)
 }

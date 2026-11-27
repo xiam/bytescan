@@ -1,7 +1,6 @@
 package tests
 
 import (
-	"errors"
 	"fmt"
 	"io"
 	mrand "math/rand"
@@ -517,7 +516,7 @@ func TestNextLookaheadMatchesNext(t *testing.T) {
 
 	sc := bytescan.New(strings.NewReader("x"))
 	tok, la, err := sc.NextLookahead()
-	require.True(t, errors.Is(err, bytescan.ErrNoRules), "err = %v", err)
+	require.ErrorIs(t, err, bytescan.ErrNoRules, "err = %v", err)
 	require.Nil(t, tok)
 	require.Equal(t, bytescan.Lookahead{}, la)
 }

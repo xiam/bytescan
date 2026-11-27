@@ -4,9 +4,10 @@ import (
 	"bytes"
 	"crypto/sha256"
 	"encoding/hex"
-	"errors"
 	"testing"
 
+	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
 	"github.com/xiam/bytescan/internal/lextest"
 	"github.com/xiam/bytescan/streamtest"
 )
@@ -36,20 +37,17 @@ func TestCaseInputs(t *testing.T) {
 		{"stream", 64 * mib, 64*mib + maxRecord, []byte("\n")},
 		{"large", 4*mib + 3, 4*mib + 3, []byte("a")},
 	}
-	if got := len(cases()); got != len(want) {
-		t.Fatalf("%d cases, want %d", got, len(want))
+	{
+		got := len(cases())
+		require.Truef(t, got == len(want), "%d cases, want %d", got, len(want))
 	}
 	for i, w := range want {
 		c := cases()[i]
-		if c.name != w.name {
-			t.Fatalf("case %d is %s, want %s", i, c.name, w.name)
-		}
+		require.Truef(t, c.name == w.name, "case %d is %s, want %s", i, c.name, w.name)
 		in := input(t, c)
-		if len(in) < w.min || len(in) > w.max {
-			t.Errorf("%s: %d bytes, want %d to %d", c.name, len(in), w.min, w.max)
-		}
+		assert.Falsef(t, len(in) < w.min || len(in) > w.max, "%s: %d bytes, want %d to %d", c.name, len(in), w.min, w.max)
 		if !bytes.HasSuffix(in, w.end) {
-			t.Errorf("%s: ends with %q, want %q", c.name, in[len(in)-len(w.end):], w.end)
+			assert.Failf(t, "unexpected test state", "%s: ends with %q, want %q", c.name, in[len(in)-len(w.end):], w.end)
 		}
 	}
 
@@ -57,14 +55,13 @@ func TestCaseInputs(t *testing.T) {
 	in := input(t, cases()[0])
 	half := in[:golangSourceSize]
 	sum := sha256.Sum256(half)
-	if hex.EncodeToString(sum[:]) != golangSourceSHA256 || !bytes.Equal(half, in[golangSourceSize:]) {
-		t.Errorf("json: the input is not golang_source.json twice")
-	}
+	assert.Falsef(t, hex.EncodeToString(sum[:]) != golangSourceSHA256 || !bytes.Equal(half, in[golangSourceSize:]), "json: the input is not golang_source.json twice")
 
 	// large is four runs of 1 MiB of 'a' between single spaces.
 	tok := bytes.Repeat([]byte("a"), mib)
-	if want := bytes.Join([][]byte{tok, tok, tok, tok}, []byte(" ")); !bytes.Equal(input(t, cases()[4]), want) {
-		t.Errorf("large: not four tokens of 1 MiB of 'a'")
+	{
+		want := bytes.Join([][]byte{tok, tok, tok, tok}, []byte(" "))
+		assert.Truef(t, bytes.Equal(input(t, cases()[4]), want), "large: not four tokens of 1 MiB of 'a'")
 	}
 }
 
@@ -81,12 +78,11 @@ func TestGeneratedInputs(t *testing.T) {
 		c, _ := findCase(name)
 		in := input(t, c)
 		var b bytes.Buffer
-		if _, err := b.ReadFrom(gen); err != nil {
-			t.Fatal(err)
+		{
+			_, err := b.ReadFrom(gen)
+			require.NoError(t, err)
 		}
-		if !bytes.Equal(in, b.Bytes()) {
-			t.Errorf("%s: the input is not the stream of its generator", name)
-		}
+		assert.Truef(t, bytes.Equal(in, b.Bytes()), "%s: the input is not the stream of its generator", name)
 	}
 }
 
@@ -106,8 +102,9 @@ func TestCasesLex(t *testing.T) {
 		switch {
 		case c.name == "stream":
 			var err error
-			if in, err = generate(streamtest.NewGenerator(1, lineRecord, streamtest.WithBudget(1<<20))); err != nil {
-				t.Fatal(err)
+			{
+				in, err = generate(streamtest.NewGenerator(1, lineRecord, streamtest.WithBudget(1<<20)))
+				require.NoError(t, err)
 			}
 		case c.name == "code" && lextest.RaceDetector:
 			continue
@@ -117,19 +114,11 @@ func TestCasesLex(t *testing.T) {
 		var tokens uint64
 		for _, l := range lanes {
 			res, err := lex(c, l, in, nop, nop)
-			if err != nil {
-				t.Fatalf("%s, %s: %v", c.name, l, err)
-			}
-			if res.Tokens == 0 || tokens != 0 && res.Tokens != tokens {
-				t.Errorf("%s, %s: %d tokens, want %d", c.name, l, res.Tokens, tokens)
-			}
+			require.NoErrorf(t, err, "%s, %s: %v", c.name, l, err)
+			assert.Falsef(t, res.Tokens == 0 || tokens != 0 && res.Tokens != tokens, "%s, %s: %d tokens, want %d", c.name, l, res.Tokens, tokens)
 			tokens = res.Tokens
-			if l == Control && res.Counts != (result{}).Counts {
-				t.Errorf("%s: the control lane counted %+v", c.name, res.Counts)
-			}
-			if l == Instrumented && (res.Scanner.Tokens != res.Tokens || res.Scanner.Unknown != 0 || res.Cursor.FillBytes != uint64(len(in))) {
-				t.Errorf("%s: the counters %+v and %+v do not match %d tokens of %d bytes", c.name, res.Scanner, res.Cursor, res.Tokens, len(in))
-			}
+			assert.Falsef(t, l == Control && res.Counts != (result{}).Counts, "%s: the control lane counted %+v", c.name, res.Counts)
+			assert.Falsef(t, l == Instrumented && (res.Scanner.Tokens != res.Tokens || res.Scanner.Unknown != 0 || res.Cursor.FillBytes != uint64(len(in))), "%s: the counters %+v and %+v do not match %d tokens of %d bytes", c.name, res.Scanner, res.Cursor, res.Tokens, len(in))
 		}
 	}
 }
@@ -143,10 +132,12 @@ func TestLaneNeedsItsBuild(t *testing.T) {
 	if tagged() {
 		wrong = Control
 	}
-	if _, err := lex(c, wrong, in, nop, nop); !errors.Is(err, errLaneBuild) {
-		t.Errorf("lex in lane %s: %v, want errLaneBuild", wrong, err)
+	{
+		_, err := lex(c, wrong, in, nop, nop)
+		assert.ErrorIsf(t, err, errLaneBuild, "lex in lane %s: %v, want errLaneBuild", wrong, err)
 	}
-	if _, err := parseLane("mean"); err == nil {
-		t.Errorf("parseLane(mean) gives no error")
+	{
+		_, err := parseLane("mean")
+		assert.Falsef(t, err == nil, "parseLane(mean) gives no error")
 	}
 }

@@ -2,13 +2,14 @@ package bytesource
 
 import (
 	"bytes"
-	"errors"
 	"fmt"
 	"io"
 	"runtime"
 	"strings"
 	"testing"
 
+	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
 	"github.com/xiam/bytescan"
 	"github.com/xiam/bytescan/cursor"
 	"github.com/xiam/bytescan/rules/core"
@@ -53,24 +54,18 @@ func TestHighBytePositions(t *testing.T) {
 			runs++
 		}
 		if l.Offset() != off || l.RuneOffset() != off || l.ByteOffset() != off {
-			t.Fatalf("token %d (%s): Offset %d, RuneOffset %d, ByteOffset %d; want the file offset %d",
-				i, l.Type(), l.Offset(), l.RuneOffset(), l.ByteOffset(), off)
+			require.FailNowf(t, "unexpected test state", "token %d (%s): Offset %d, RuneOffset %d, ByteOffset %d; want the file offset %d", i, l.Type(), l.Offset(), l.RuneOffset(), l.ByteOffset(), off)
 		}
 		if l.Len() != n || l.Span().Bytes() != n || l.Span().Runes() != n {
-			t.Fatalf("token %d (%s): Len %d, Span.Bytes %d, Span.Runes %d; want its length in bytes %d",
-				i, l.Type(), l.Len(), l.Span().Bytes(), l.Span().Runes(), n)
+			require.FailNowf(t, "unexpected test state", "token %d (%s): Len %d, Span.Bytes %d, Span.Runes %d; want its length in bytes %d", i, l.Type(), l.Len(), l.Span().Bytes(), l.Span().Runes(), n)
 		}
 		if got := Bytes(l.Text()); !bytes.Equal(got, in[off:off+n]) {
-			t.Fatalf("token %d (%s): bytes % x, want % x", i, l.Type(), got, in[off:off+n])
+			require.FailNowf(t, "unexpected test state", "token %d (%s): bytes % x, want % x", i, l.Type(), got, in[off:off+n])
 		}
 		off += n
 	}
-	if off != len(in) {
-		t.Fatalf("the tokens cover %d bytes, want %d", off, len(in))
-	}
-	if runs == 0 {
-		t.Fatal("no RUN token: the test does not cover tokens longer than one byte")
-	}
+	require.Truef(t, off == len(in), "the tokens cover %d bytes, want %d", off, len(in))
+	require.False(t, runs == 0, "no RUN token: the test does not cover tokens longer than one byte")
 }
 
 // TestHighByteGuard checks that WithMaxTokenBytes counts one for each byte of
@@ -84,19 +79,13 @@ func TestHighByteGuard(t *testing.T) {
 	}
 
 	ls := lexBytes(t, in, rules, bytescan.WithMaxTokenBytes(n))
-	if len(ls) != 1 || ls[0].Type() != "HIGH" || ls[0].Len() != n || ls[0].Span().Bytes() != n {
-		t.Fatalf("with a guard of %d: got %d tokens, want one HIGH token of %d bytes", n, len(ls), n)
-	}
+	require.Falsef(t, len(ls) != 1 || ls[0].Type() != "HIGH" || ls[0].Len() != n || ls[0].Span().Bytes() != n, "with a guard of %d: got %d tokens, want one HIGH token of %d bytes", n, len(ls), n)
 
 	lx := bytescan.NewWithCursorOptions(NewCursor(bytes.NewReader(in)), bytescan.WithMaxTokenBytes(n-1))
 	rules(lx)
 	_, err := lx.Next()
-	if !errors.Is(err, cursor.ErrRetentionExceeded) {
-		t.Fatalf("with a guard of %d: err = %v, want an error that wraps cursor.ErrRetentionExceeded", n-1, err)
-	}
-	if !errors.Is(err, bytescan.ErrTokenTooLarge) {
-		t.Fatalf("with a guard of %d: err = %v, want an error that wraps bytescan.ErrTokenTooLarge", n-1, err)
-	}
+	require.ErrorIsf(t, err, cursor.ErrRetentionExceeded, "with a guard of %d: err = %v, want an error that wraps cursor.ErrRetentionExceeded", n-1, err)
+	require.ErrorIsf(t, err, bytescan.ErrTokenTooLarge, "with a guard of %d: err = %v, want an error that wraps bytescan.ErrTokenTooLarge", n-1, err)
 }
 
 // TestByteLineColumn checks that Line and Column of a NewCursor cursor advance
@@ -111,13 +100,10 @@ func TestByteLineColumn(t *testing.T) {
 		{3, 0},                         // 0A
 		{4, 0}, {4, 1}, {4, 2}, {4, 3}, // E2 82 AC 85: U+0085 (NEL) does not end a line
 	}
-	if len(ls) != len(want) {
-		t.Fatalf("got %d tokens, want one per byte (%d)", len(ls), len(want))
-	}
+	require.Truef(t, len(ls) == len(want), "got %d tokens, want one per byte (%d)", len(ls), len(want))
 	for i, l := range ls {
 		if got := (pos{l.Line(), l.Column()}); got != want[i] {
-			t.Errorf("byte %d (%02x): line %d, column %d; want line %d, column %d",
-				i, in[i], got.line, got.column, want[i].line, want[i].column)
+			assert.Failf(t, "unexpected test state", "byte %d (%02x): line %d, column %d; want line %d, column %d", i, in[i], got.line, got.column, want[i].line, want[i].column)
 		}
 	}
 }
@@ -136,32 +122,23 @@ func TestByteContext(t *testing.T) {
 		if err == io.EOF {
 			break
 		}
-		if err != nil {
-			t.Fatal(err)
-		}
+		require.NoError(t, err)
 		if l.Type() == "HIGH" {
 			high = l
 		}
 	}
-	if high == nil {
-		t.Fatal("no HIGH token")
-	}
+	require.False(t, high == nil, "no HIGH token")
 	ctx, err := lx.Context(high, 0, 0)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if ctx != "\xff\x80" {
-		t.Errorf("Context(tok, 0, 0) = %q, want the raw bytes \"\\xff\\x80\"", ctx)
-	}
+	require.NoError(t, err)
+	assert.Truef(t, ctx == "\xff\x80", "Context(tok, 0, 0) = %q, want the raw bytes \"\\xff\\x80\"", ctx)
 	if Text(ctx) != high.Text() {
-		t.Errorf("Text(Context) = %q, want the token text %q", Text(ctx), high.Text())
+		assert.Failf(t, "unexpected test state", "Text(Context) = %q, want the token text %q", Text(ctx), high.Text())
 	}
 	ctx, err = lx.Context(high, 1, 1)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if want := string(in); ctx != want {
-		t.Errorf("Context(tok, 1, 1) = %q, want %q", ctx, want)
+	require.NoError(t, err)
+	{
+		want := string(in)
+		assert.Truef(t, ctx == want, "Context(tok, 1, 1) = %q, want %q", ctx, want)
 	}
 }
 
@@ -209,16 +186,12 @@ func TestLexRetainedBytes(t *testing.T) {
 	leaky := func(cur bytescan.Cursor) *lenField { return newLenField(cur, false) }
 
 	ls := streamtest.LexRetainedBytes(t, bytes.NewReader(in), n, released)
-	if len(ls) != 2 || ls[1].Type() != "DATA" || ls[1].Len() != n || ls[1].Span().Bytes() != n || ls[1].ByteOffset() != 1 {
-		t.Fatalf("released driver: got %d tokens, want LEN and one DATA token of %d bytes at byte offset 1", len(ls), n)
-	}
+	require.Falsef(t, len(ls) != 2 || ls[1].Type() != "DATA" || ls[1].Len() != n || ls[1].Span().Bytes() != n || ls[1].ByteOffset() != 1, "released driver: got %d tokens, want LEN and one DATA token of %d bytes at byte offset 1", len(ls), n)
 
 	msg := fails(t, func(tb testing.TB) {
 		streamtest.LexRetainedBytes(tb, bytes.NewReader(in), n, leaky)
 	})
-	if !strings.Contains(msg, cursor.ErrRetentionExceeded.Error()) {
-		t.Fatalf("LexRetainedBytes without the Release: got %q, want the retention error", msg)
-	}
+	require.Truef(t, strings.Contains(msg, cursor.ErrRetentionExceeded.Error()), "LexRetainedBytes without the Release: got %q, want the retention error", msg)
 }
 
 // fatalTB records the message of the first Fatalf and stops the goroutine

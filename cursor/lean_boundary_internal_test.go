@@ -8,6 +8,8 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
 	"github.com/xiam/bytescan/internal/leanread"
 )
 
@@ -41,13 +43,9 @@ func boundaryTwin(t *testing.T, a, b *Reader, batch int, seed int64) {
 	t.Helper()
 
 	lean, ok := leanread.Of(a)
-	if !ok {
-		t.Fatal("leanread.Of(*Reader) reports no lean read path")
-	}
+	require.True(t, ok, "leanread.Of(*Reader) reports no lean read path")
 	boundary, ok := lean.(leanread.Boundary[Pos, *Checkpoint])
-	if !ok {
-		t.Fatal("the lean read path of *Reader has no boundary operations")
-	}
+	require.True(t, ok, "the lean read path of *Reader has no boundary operations")
 
 	rng := rand.New(rand.NewSource(seed))
 	dst := make([]leanread.Rune, batch)
@@ -56,18 +54,22 @@ func boundaryTwin(t *testing.T, a, b *Reader, batch int, seed int64) {
 
 	compare := func(step string) {
 		t.Helper()
-		if got, want := a.Cursor(), b.Cursor(); got != want {
-			t.Fatalf("%s: cursor %+v, want %+v", step, got, want)
+		{
+			got, want := a.Cursor(), b.Cursor()
+			require.Truef(t, got == want, "%s: cursor %+v, want %+v", step, got, want)
 		}
-		if got, want := a.RetainedBytes(), b.RetainedBytes(); got != want {
-			t.Fatalf("%s: retained %d bytes, want %d", step, got, want)
+		{
+			got, want := a.RetainedBytes(), b.RetainedBytes()
+			require.Truef(t, got == want, "%s: retained %d bytes, want %d", step, got, want)
 		}
-		if got, want := a.epoch.Load(), b.epoch.Load(); got != want {
-			t.Fatalf("%s: epoch %d, want %d", step, got, want)
+		{
+			got, want := a.epoch.Load(), b.epoch.Load()
+			require.Truef(t, got == want, "%s: epoch %d, want %d", step, got, want)
 		}
 		for k := range ringA {
-			if got, want := ringA[k].Active(), ringB[k].Active(); got != want {
-				t.Fatalf("%s: slot %d active %v, want %v", step, k, got, want)
+			{
+				got, want := ringA[k].Active(), ringB[k].Active()
+				require.Truef(t, got == want, "%s: slot %d active %v, want %v", step, k, got, want)
 			}
 		}
 	}
@@ -83,19 +85,16 @@ func boundaryTwin(t *testing.T, a, b *Reader, batch int, seed int64) {
 			var errA error
 			posA, errA = boundary.Mark(ringA[next])
 			errB := b.Remark(ringB[next])
-			if errText(errA) != errText(errB) {
-				t.Fatalf("Mark: %v, Remark: %v", errA, errB)
-			}
+			require.Truef(t, errText(errA) == errText(errB), "Mark: %v, Remark: %v", errA, errB)
 			if errB == nil {
 				posB = ringB[next].Pos()
-				if got := ringA[next].Pos(); got != posA {
-					t.Fatalf("Mark returned %+v, Pos %+v", posA, got)
+				{
+					got := ringA[next].Pos()
+					require.Truef(t, got == posA, "Mark returned %+v, Pos %+v", posA, got)
 				}
 			}
 		}
-		if posA != posB {
-			t.Fatalf("marked %+v, want %+v", posA, posB)
-		}
+		require.Truef(t, posA == posB, "marked %+v, want %+v", posA, posB)
 		compare("mark")
 	}
 
@@ -104,9 +103,7 @@ func boundaryTwin(t *testing.T, a, b *Reader, batch int, seed int64) {
 	abandon := func() {
 		t.Helper()
 		errA, errB := ringA[next].Reset(), ringB[next].Reset()
-		if errText(errA) != errText(errB) {
-			t.Fatalf("abandon: Reset %v, want %v", errA, errB)
-		}
+		require.Truef(t, errText(errA) == errText(errB), "abandon: Reset %v, want %v", errA, errB)
 		_ = ringA[next].Release()
 		_ = ringB[next].Release()
 		compare("abandon")
@@ -118,9 +115,7 @@ func boundaryTwin(t *testing.T, a, b *Reader, batch int, seed int64) {
 		n, at, errA := lean.Peek(0, dst)
 		if errA != nil {
 			_, errB := b.ReadLocatedRune()
-			if errText(errA) != errText(errB) {
-				t.Fatalf("Peek: %v, ReadLocatedRune: %v", errA, errB)
-			}
+			require.Truef(t, errText(errA) == errText(errB), "Peek: %v, ReadLocatedRune: %v", errA, errB)
 			abandon()
 			if errors.Is(errA, ErrMoreInput) && retries < 50 {
 				retries++
@@ -133,11 +128,13 @@ func boundaryTwin(t *testing.T, a, b *Reader, batch int, seed int64) {
 		if at.Partial {
 			// The scanner moves over a rune that a Peek decoded from an
 			// incomplete sequence with Seek, and commits with Release.
-			if _, err := a.Seek(int64(dst[0].Size), io.SeekCurrent); err != nil {
-				t.Fatalf("Seek over a partial rune: %v", err)
+			{
+				_, err := a.Seek(int64(dst[0].Size), io.SeekCurrent)
+				require.NoErrorf(t, err, "Seek over a partial rune: %v", err)
 			}
-			if _, err := b.ReadLocatedRune(); err != nil {
-				t.Fatalf("ReadLocatedRune of a partial rune: %v", err)
+			{
+				_, err := b.ReadLocatedRune()
+				require.NoErrorf(t, err, "ReadLocatedRune of a partial rune: %v", err)
 			}
 			_ = ringA[old].Release()
 			_ = ringB[old].Release()
@@ -148,17 +145,17 @@ func boundaryTwin(t *testing.T, a, b *Reader, batch int, seed int64) {
 			for j := 0; j < k; j++ {
 				bytes += dst[j].Size
 				runes[j] = dst[j].Rune
-				if _, err := b.ReadLocatedRune(); err != nil {
-					t.Fatalf("ReadLocatedRune %d of %d: %v", j, k, err)
+				{
+					_, err := b.ReadLocatedRune()
+					require.NoErrorf(t, err, "ReadLocatedRune %d of %d: %v", j, k, err)
 				}
 			}
 			got, err := boundary.AdvanceRelease(bytes, extentOf(runes), ringA[old])
-			if err != nil {
-				t.Fatalf("AdvanceRelease(%d): %v", bytes, err)
-			}
+			require.NoErrorf(t, err, "AdvanceRelease(%d): %v", bytes, err)
 			_ = ringB[old].Release()
-			if want := b.Cursor(); got != want {
-				t.Fatalf("AdvanceRelease(%d) returned %+v, want %+v", bytes, got, want)
+			{
+				want := b.Cursor()
+				require.Truef(t, got == want, "AdvanceRelease(%d) returned %+v, want %+v", bytes, got, want)
 			}
 		}
 		next = old
@@ -169,9 +166,7 @@ func boundaryTwin(t *testing.T, a, b *Reader, batch int, seed int64) {
 			k := rng.Intn(boundaryRing)
 			if ringA[k] != nil {
 				errA, errB := ringA[k].Reset(), ringB[k].Reset()
-				if errText(errA) != errText(errB) {
-					t.Fatalf("Reset of slot %d: %v, want %v", k, errA, errB)
-				}
+				require.Truef(t, errText(errA) == errText(errB), "Reset of slot %d: %v, want %v", k, errA, errB)
 				compare("reset")
 			}
 		}
@@ -186,24 +181,23 @@ func TestLeanAdvanceReleaseFailureKeepsOld(t *testing.T) {
 	old := r.Checkpoint()
 	lean, _ := leanread.Of(r)
 	dst := make([]leanread.Rune, 4)
-	if _, _, err := lean.Peek(0, dst); err != nil {
-		t.Fatal(err)
+	{
+		_, _, err := lean.Peek(0, dst)
+		require.NoError(t, err)
 	}
 	before := r.Cursor()
 	// The buffer holds six bytes or more, and four is the limit.
-	if held := r.w - r.r; held < 6 {
-		t.Fatalf("the buffer holds %d bytes, want 6 or more", held)
+	{
+		held := r.w - r.r
+		require.Falsef(t, held < 6, "the buffer holds %d bytes, want 6 or more", held)
 	}
 	_, err := lean.(leanread.Boundary[Pos, *Checkpoint]).AdvanceRelease(6, leanread.Extent{Runes: 6}, old)
-	if !errors.Is(err, ErrRetentionExceeded) {
-		t.Fatalf("AdvanceRelease(6) = %v, want ErrRetentionExceeded", err)
+	require.ErrorIsf(t, err, ErrRetentionExceeded, "AdvanceRelease(6) = %v, want ErrRetentionExceeded", err)
+	{
+		got := r.Cursor()
+		assert.Truef(t, got == before, "cursor %+v after a failed AdvanceRelease, want %+v", got, before)
 	}
-	if got := r.Cursor(); got != before {
-		t.Errorf("cursor %+v after a failed AdvanceRelease, want %+v", got, before)
-	}
-	if !old.Active() {
-		t.Error("a failed AdvanceRelease released the old checkpoint")
-	}
+	assert.True(t, old.Active(), "a failed AdvanceRelease released the old checkpoint")
 }
 
 // TestLeanAdvanceReleaseOldStates checks that AdvanceRelease moves the cursor,
@@ -214,8 +208,9 @@ func TestLeanAdvanceReleaseOldStates(t *testing.T) {
 	other := NewReader(strings.NewReader("xyz"))
 	onOther := other.Checkpoint()
 	released := other.Checkpoint()
-	if err := released.Release(); err != nil {
-		t.Fatal(err)
+	{
+		err := released.Release()
+		require.NoError(t, err)
 	}
 
 	for _, tc := range []struct {
@@ -229,21 +224,16 @@ func TestLeanAdvanceReleaseOldStates(t *testing.T) {
 		r := NewReader(strings.NewReader("ab\ncd"))
 		lean, _ := leanread.Of(r)
 		dst := make([]leanread.Rune, 8)
-		if _, _, err := lean.Peek(0, dst); err != nil {
-			t.Fatal(err)
+		{
+			_, _, err := lean.Peek(0, dst)
+			require.NoError(t, err)
 		}
 		got, err := lean.(leanread.Boundary[Pos, *Checkpoint]).AdvanceRelease(4, leanread.Extent{Runes: 4, Lines: 1, Column: 1}, tc.old)
 		want := Pos{byteOffset: 4, runeOffset: 4, line: 2, column: 1}
-		if err != nil || got != want {
-			t.Errorf("%s: AdvanceRelease(4) = %+v, %v; want %+v", tc.name, got, err, want)
-		}
+		assert.Falsef(t, err != nil || got != want, "%s: AdvanceRelease(4) = %+v, %v; want %+v", tc.name, got, err, want)
 	}
-	if !onOther.Active() {
-		t.Error("AdvanceRelease released a checkpoint of another reader")
-	}
-	if released.Active() {
-		t.Error("a released checkpoint became active")
-	}
+	assert.True(t, onOther.Active(), "AdvanceRelease released a checkpoint of another reader")
+	assert.False(t, released.Active(), "a released checkpoint became active")
 }
 
 // TestLeanMarkFailsAsRemark checks that Mark refuses what Remark refuses,
@@ -253,17 +243,18 @@ func TestLeanMarkFailsAsRemark(t *testing.T) {
 	lean, _ := leanread.Of(r)
 	boundary := lean.(leanread.Boundary[Pos, *Checkpoint])
 
-	if _, err := boundary.Mark(nil); !errors.Is(err, ErrCheckpointReleased) {
-		t.Errorf("Mark(nil) = %v, want ErrCheckpointReleased", err)
+	{
+		_, err := boundary.Mark(nil)
+		assert.ErrorIsf(t, err, ErrCheckpointReleased, "Mark(nil) = %v, want ErrCheckpointReleased", err)
 	}
 	active := r.Checkpoint()
-	if _, err := boundary.Mark(active); !errors.Is(err, ErrCheckpointActive) {
-		t.Errorf("Mark(active) = %v, want ErrCheckpointActive", err)
+	{
+		_, err := boundary.Mark(active)
+		assert.ErrorIsf(t, err, ErrCheckpointActive, "Mark(active) = %v, want ErrCheckpointActive", err)
 	}
-	if !active.Active() {
-		t.Error("a refused Mark released the checkpoint")
-	}
-	if got, want := r.epoch.Load(), uint64(1); got != want {
-		t.Errorf("epoch %d after a refused Mark, want %d", got, want)
+	assert.True(t, active.Active(), "a refused Mark released the checkpoint")
+	{
+		got, want := r.epoch.Load(), uint64(1)
+		assert.Truef(t, got == want, "epoch %d after a refused Mark, want %d", got, want)
 	}
 }

@@ -3,7 +3,6 @@ package streamtest
 import (
 	"bufio"
 	"bytes"
-	"errors"
 	"fmt"
 	"io"
 	"math/rand"
@@ -11,6 +10,8 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
 	"github.com/xiam/bytescan"
 	"github.com/xiam/bytescan/cursor"
 	"github.com/xiam/bytescan/rules/core"
@@ -129,9 +130,7 @@ func withSamples(dst *[]samplePoint) Option {
 func readAll(t *testing.T, r io.Reader) []byte {
 	t.Helper()
 	b, err := io.ReadAll(r)
-	if err != nil {
-		t.Fatal(err)
-	}
+	require.NoError(t, err)
 	return b
 }
 
@@ -143,21 +142,20 @@ func TestGenerator(t *testing.T) {
 	a := NewGenerator(1, lineRecord, WithBudget(budget))
 	got := readAll(t, a)
 
-	if int64(len(got)) <= budget {
-		t.Fatalf("stream is %d bytes, want more than the budget %d", len(got), budget)
-	}
+	require.Falsef(t, int64(len(got)) <= budget, "stream is %d bytes, want more than the budget %d", len(got), budget)
 	if got[len(got)-1] != '\n' {
-		t.Fatalf("stream does not end at a record boundary: %q", got[len(got)-16:])
+		require.FailNowf(t, "unexpected test state", "stream does not end at a record boundary: %q", got[len(got)-16:])
 	}
 	last := got[:len(got)-1]
-	if n := len(got) - 1 - bytes.LastIndexByte(last, '\n'); int64(len(got)-n) > budget {
-		t.Fatalf("stream has %d bytes before its last record, want at most the budget %d", len(got)-n, budget)
+	{
+		n := len(got) - 1 - bytes.LastIndexByte(last, '\n')
+		require.Falsef(t, int64(len(got)-n) > budget, "stream has %d bytes before its last record, want at most the budget %d", len(got)-n, budget)
 	}
 	if lines := bytes.Count(got, []byte("\n")); lines != a.Records() {
-		t.Fatalf("stream has %d lines, the generator reports %d records", lines, a.Records())
+		require.FailNowf(t, "unexpected test state", "stream has %d lines, the generator reports %d records", lines, a.Records())
 	}
 	if a.Bytes() != int64(len(got)) {
-		t.Fatalf("generator reports %d bytes, read %d", a.Bytes(), len(got))
+		require.FailNowf(t, "unexpected test state", "generator reports %d bytes, read %d", a.Bytes(), len(got))
 	}
 
 	// A 1-byte reader sees the same stream.
@@ -170,21 +168,15 @@ func TestGenerator(t *testing.T) {
 		if err == io.EOF {
 			break
 		}
-		if err != nil {
-			t.Fatal(err)
-		}
+		require.NoError(t, err)
 	}
-	if !bytes.Equal(small.Bytes(), got) {
-		t.Fatal("a 1-byte reader read a different stream")
-	}
+	require.True(t, bytes.Equal(small.Bytes(), got), "a 1-byte reader read a different stream")
 
 	other := readAll(t, NewGenerator(2, lineRecord, WithBudget(budget)))
-	if bytes.Equal(other, got) {
-		t.Fatal("seeds 1 and 2 gave the same stream")
-	}
+	require.False(t, bytes.Equal(other, got), "seeds 1 and 2 gave the same stream")
 
 	if d := NewGenerator(1, lineRecord); d.Budget() != DefaultBudget() {
-		t.Fatalf("default budget is %d, want %d", d.Budget(), DefaultBudget())
+		require.FailNowf(t, "unexpected test state", "default budget is %d, want %d", d.Budget(), DefaultBudget())
 	}
 }
 
@@ -199,7 +191,7 @@ func TestCorrupt(t *testing.T) {
 	c := Corrupt(NewGenerator(7, lineRecord, WithBudget(budget)), 8, 0.1, Garbage(garbage, 1, 16))
 	got := readAll(t, c)
 	if c.Budget() != budget {
-		t.Fatalf("budget is %d, want %d", c.Budget(), budget)
+		require.FailNowf(t, "unexpected test state", "budget is %d, want %d", c.Budget(), budget)
 	}
 
 	var stripped []byte
@@ -211,28 +203,22 @@ func TestCorrupt(t *testing.T) {
 			break
 		}
 		n++
-		if in.Offset < prev {
-			t.Fatalf("injection %d at %d is before the end of the previous one at %d", n, in.Offset, prev)
-		}
+		require.Falsef(t, in.Offset < prev, "injection %d at %d is before the end of the previous one at %d", n, in.Offset, prev)
 		stripped = append(stripped, got[prev:in.Offset]...)
 		run := got[in.Offset : in.Offset+int64(in.Len)]
-		if strings.Trim(string(run), garbage) != "" {
-			t.Fatalf("injection %d at %d is %q, want bytes of %q", n, in.Offset, run, garbage)
-		}
+		require.Truef(t, strings.Trim(string(run), garbage) == "", "injection %d at %d is %q, want bytes of %q", n, in.Offset, run, garbage)
 		rest := string(got[in.Offset+int64(in.Len):])
 		if !strings.HasPrefix(rest, cleanLines[in.Record]) {
-			t.Fatalf("injection %d is not followed by record %d %q", n, in.Record, cleanLines[in.Record])
+			require.FailNowf(t, "unexpected test state", "injection %d is not followed by record %d %q", n, in.Record, cleanLines[in.Record])
 		}
 		prev = in.Offset + int64(in.Len)
 	}
 	stripped = append(stripped, got[prev:]...)
 
 	if n == 0 || n != c.Injected() {
-		t.Fatalf("NextInjection returned %d runs, Injected reports %d", n, c.Injected())
+		require.FailNowf(t, "unexpected test state", "NextInjection returned %d runs, Injected reports %d", n, c.Injected())
 	}
-	if !bytes.Equal(stripped, clean) {
-		t.Fatal("the corrupted stream without its garbage runs is not the clean stream")
-	}
+	require.True(t, bytes.Equal(stripped, clean), "the corrupted stream without its garbage runs is not the clean stream")
 	t.Logf("%d garbage runs in %d records", n, len(cleanLines)-1)
 }
 
@@ -242,20 +228,19 @@ func TestRunLong(t *testing.T) {
 	gen := NewGenerator(1, lineRecord)
 	res := Run(t, newLineScanner, gen)
 	if got := res.Counts["NEWLINE"]; got != int64(gen.Records()) {
-		t.Fatalf("lexed %d NEWLINE, want one per record (%d)", got, gen.Records())
+		require.FailNowf(t, "unexpected test state", "lexed %d NEWLINE, want one per record (%d)", got, gen.Records())
 	}
 	if got := res.Counts["EQUALS"]; got != int64(gen.Records()) {
-		t.Fatalf("lexed %d EQUALS, want one per record (%d)", got, gen.Records())
+		require.FailNowf(t, "unexpected test state", "lexed %d EQUALS, want one per record (%d)", got, gen.Records())
 	}
-	if got := res.Counts[bytescan.TokenTypeUnknown]; got != 0 {
-		t.Fatalf("lexed %d UNKNOWN in a clean stream", got)
+	{
+		got := res.Counts[bytescan.TokenTypeUnknown]
+		require.Truef(t, got == 0, "lexed %d UNKNOWN in a clean stream", got)
 	}
 	if res.Bytes != gen.Bytes() {
-		t.Fatalf("Run read %d bytes, the generator wrote %d", res.Bytes, gen.Bytes())
+		require.FailNowf(t, "unexpected test state", "Run read %d bytes, the generator wrote %d", res.Bytes, gen.Bytes())
 	}
-	if res.Samples < 2 {
-		t.Fatalf("took %d heap samples, want at least 2", res.Samples)
-	}
+	require.Falsef(t, res.Samples < 2, "took %d heap samples, want at least 2", res.Samples)
 }
 
 // TestLeakFails proves that the ceiling catches growth: a scanner whose idle
@@ -263,9 +248,7 @@ func TestRunLong(t *testing.T) {
 // budget, ceiling and baseline.
 func TestLeakFails(t *testing.T) {
 	_, err := run(newLeakyScanner, defaultGenerator(1))
-	if !errors.Is(err, ErrCeiling) {
-		t.Fatalf("got error %v, want ErrCeiling", err)
-	}
+	require.ErrorIsf(t, err, ErrCeiling, "got error %v, want ErrCeiling", err)
 	t.Log(err)
 }
 
@@ -290,13 +273,13 @@ func TestRunCorrupt(t *testing.T) {
 		off := int64(l.ByteOffset())
 		if !have || off >= cur.Offset+int64(cur.Len) {
 			if have && off == cur.Offset+int64(cur.Len) && l.Type() != "WORD" {
-				t.Fatalf("after the garbage at %d: got %s %q, want WORD", cur.Offset, l.Type(), l.Text())
+				require.FailNowf(t, "unexpected test state", "after the garbage at %d: got %s %q, want WORD", cur.Offset, l.Type(), l.Text())
 			}
 			cur, have = c.NextInjection()
 		}
 		inside := have && off >= cur.Offset && off < cur.Offset+int64(cur.Len)
 		if inside != (l.Type() == bytescan.TokenTypeUnknown) {
-			t.Fatalf("at %d: got %s %q, garbage run here: %v", off, l.Type(), l.Text(), inside)
+			require.FailNowf(t, "unexpected test state", "at %d: got %s %q, garbage run here: %v", off, l.Type(), l.Text(), inside)
 		}
 		if inside {
 			unknown++
@@ -306,7 +289,7 @@ func TestRunCorrupt(t *testing.T) {
 	// always find the run that a token falls in.
 	res := Run(t, newLineScanner, c, WithTokenFunc(check))
 	if res.Counts[bytescan.TokenTypeUnknown] != unknown || unknown == 0 {
-		t.Fatalf("lexed %d UNKNOWN, %d inside garbage runs", res.Counts[bytescan.TokenTypeUnknown], unknown)
+		require.FailNowf(t, "unexpected test state", "lexed %d UNKNOWN, %d inside garbage runs", res.Counts[bytescan.TokenTypeUnknown], unknown)
 	}
 	t.Logf("%d garbage runs, %d UNKNOWN tokens", c.Injected(), unknown)
 }
@@ -316,9 +299,7 @@ func TestRunCorrupt(t *testing.T) {
 func TestTooFewSamples(t *testing.T) {
 	const budget = 16 << 10
 	_, err := run(newLineScanner, NewGenerator(1, lineRecord, WithBudget(budget)), WithSampleEvery(4*budget))
-	if err == nil || !strings.Contains(err.Error(), "no growth was checked") {
-		t.Fatalf("got error %v, want the too-few-samples error", err)
-	}
+	require.Falsef(t, err == nil || !strings.Contains(err.Error(), "no growth was checked"), "got error %v, want the too-few-samples error", err)
 }
 
 // TestCeilingContract checks the default ceiling: DefaultCeiling keeps its
@@ -334,8 +315,9 @@ func TestCeilingContract(t *testing.T) {
 		{512 << 10, 256 << 10},
 		{LongBudget, 16 << 20},
 	} {
-		if got := DefaultCeiling(c.budget); got != c.want {
-			t.Errorf("DefaultCeiling(%d) = %d, want %d", c.budget, got, c.want)
+		{
+			got := DefaultCeiling(c.budget)
+			assert.Truef(t, got == c.want, "DefaultCeiling(%d) = %d, want %d", c.budget, got, c.want)
 		}
 	}
 
@@ -343,11 +325,9 @@ func TestCeilingContract(t *testing.T) {
 	if raceDetector {
 		wantBudget, implicit = 256<<10, 48<<10
 	}
-	if defaultBudget != wantBudget {
-		t.Fatalf("default budget is %d, want %d", defaultBudget, wantBudget)
-	}
+	require.Truef(t, defaultBudget == wantBudget, "default budget is %d, want %d", defaultBudget, wantBudget)
 	if !Long() && DefaultCeiling(DefaultBudget()) != DefaultCeiling(wantBudget) {
-		t.Errorf("DefaultCeiling(DefaultBudget()) = %d, want the formula value %d", DefaultCeiling(DefaultBudget()), DefaultCeiling(wantBudget))
+		assert.Failf(t, "unexpected test state", "DefaultCeiling(DefaultBudget()) = %d, want the formula value %d", DefaultCeiling(DefaultBudget()), DefaultCeiling(wantBudget))
 	}
 
 	// An implicit budget gets 48 KiB under the race detector and the formula
@@ -370,11 +350,13 @@ func TestCeilingContract(t *testing.T) {
 		if raceDetector && c.implicit {
 			want, wantAfter = 48<<10, cursorBuffer
 		}
-		if got := defaultCeiling(c.src); got != want {
-			t.Errorf("%s: default ceiling %d, want %d", c.name, got, want)
+		{
+			got := defaultCeiling(c.src)
+			assert.Truef(t, got == want, "%s: default ceiling %d, want %d", c.name, got, want)
 		}
-		if got := defaultBaselineAfter(c.src); got != wantAfter {
-			t.Errorf("%s: baseline after %d bytes, want %d", c.name, got, wantAfter)
+		{
+			got := defaultBaselineAfter(c.src)
+			assert.Truef(t, got == wantAfter, "%s: baseline after %d bytes, want %d", c.name, got, wantAfter)
 		}
 	}
 
@@ -384,8 +366,7 @@ func TestCeilingContract(t *testing.T) {
 	g := NewGenerator(1, lineRecord)
 	*long = saved
 	if g.Budget() != LongBudget || defaultCeiling(g) != 16<<20 || defaultBaselineAfter(g) != 0 {
-		t.Errorf("long run: budget %d, ceiling %d, baseline after %d; want %d, %d, 0",
-			g.Budget(), defaultCeiling(g), defaultBaselineAfter(g), LongBudget, 16<<20)
+		assert.Failf(t, "unexpected test state", "long run: budget %d, ceiling %d, baseline after %d; want %d, %d, 0", g.Budget(), defaultCeiling(g), defaultBaselineAfter(g), LongBudget, 16<<20)
 	}
 
 	// Run enforces the implicit default, and its baseline waits for the first
@@ -393,19 +374,14 @@ func TestCeilingContract(t *testing.T) {
 	// run at its first sample after the baseline, so the check is short.
 	var samples []samplePoint
 	res, err := run(newLeakyScanner, defaultGenerator(1), withSamples(&samples))
-	if !errors.Is(err, ErrCeiling) {
-		t.Fatalf("got error %v, want ErrCeiling", err)
-	}
-	if res.Ceiling != implicit {
-		t.Errorf("Run enforced a ceiling of %d, want %d", res.Ceiling, implicit)
-	}
-	if first := samples[0].pos; (first >= cursorBuffer) != raceDetector {
-		t.Errorf("baseline at %d bytes of tokens; race detector: %v", first, raceDetector)
+	require.ErrorIsf(t, err, ErrCeiling, "got error %v, want ErrCeiling", err)
+	assert.Truef(t, res.Ceiling == implicit, "Run enforced a ceiling of %d, want %d", res.Ceiling, implicit)
+	{
+		first := samples[0].pos
+		assert.Truef(t, (first >= cursorBuffer) == raceDetector, "baseline at %d bytes of tokens; race detector: %v", first, raceDetector)
 	}
 	res, _ = run(newLeakyScanner, defaultGenerator(1), WithCeiling(1<<10))
-	if res.Ceiling != 1<<10 {
-		t.Errorf("WithCeiling(1 KiB): Run enforced a ceiling of %d", res.Ceiling)
-	}
+	assert.Truef(t, res.Ceiling == 1<<10, "WithCeiling(1 KiB): Run enforced a ceiling of %d", res.Ceiling)
 }
 
 // TestBaselineRule checks the moved baseline: it is the first sample after
@@ -422,38 +398,42 @@ func TestBaselineRule(t *testing.T) {
 	}
 
 	var early []samplePoint
-	if _, err := run(newAheadScanner, NewGenerator(1, lineRecord, WithBudget(budget)), WithCeiling(1<<30), withSamples(&early)); err != nil {
-		t.Fatal(err)
+	{
+		_, err := run(newAheadScanner, NewGenerator(1, lineRecord, WithBudget(budget)), WithCeiling(1<<30), withSamples(&early))
+		require.NoError(t, err)
 	}
 	if early[0].pos >= cursorBuffer || early[0].read < cursorBuffer {
-		t.Fatalf("without the rule, the first sample is at %d bytes of tokens and %d bytes read; want the reader past %d bytes before the tokens", early[0].pos, early[0].read, cursorBuffer)
+		require.FailNowf(t, "unexpected test state", "without the rule, the first sample is at %d bytes of tokens and %d bytes read; want the reader past %d bytes before the tokens", early[0].pos, early[0].read, cursorBuffer)
 	}
 
 	var moved []samplePoint
-	if _, err := run(newAheadScanner, NewGenerator(1, lineRecord, WithBudget(budget)), WithCeiling(1<<30), withBaselineAfter(cursorBuffer), withSamples(&moved)); err != nil {
-		t.Fatal(err)
+	{
+		_, err := run(newAheadScanner, NewGenerator(1, lineRecord, WithBudget(budget)), WithCeiling(1<<30), withBaselineAfter(cursorBuffer), withSamples(&moved))
+		require.NoError(t, err)
 	}
 	every := int64(budget / 16)
-	if first := moved[0].pos; first < cursorBuffer || first >= cursorBuffer+every {
-		t.Fatalf("baseline at %d bytes of tokens, want the first sample at or after %d, before %d", first, cursorBuffer, cursorBuffer+every)
+	{
+		first := moved[0].pos
+		require.Falsef(t, first < cursorBuffer || first >= cursorBuffer+every, "baseline at %d bytes of tokens, want the first sample at or after %d, before %d", first, cursorBuffer, cursorBuffer+every)
 	}
-	if len(moved) < 2 || len(moved) >= len(early) {
-		t.Fatalf("took %d samples with the rule and %d without", len(moved), len(early))
-	}
+	require.Falsef(t, len(moved) < 2 || len(moved) >= len(early), "took %d samples with the rule and %d without", len(moved), len(early))
 
 	// A custom interval: the baseline is the first sample of that interval
 	// after the boundary, and the samples keep the interval.
 	const interval = 5000
 	var custom []samplePoint
-	if _, err := run(newLineScanner, NewGenerator(1, lineRecord, WithBudget(budget)), WithCeiling(1<<30), WithSampleEvery(interval), withBaselineAfter(cursorBuffer), withSamples(&custom)); err != nil {
-		t.Fatal(err)
+	{
+		_, err := run(newLineScanner, NewGenerator(1, lineRecord, WithBudget(budget)), WithCeiling(1<<30), WithSampleEvery(interval), withBaselineAfter(cursorBuffer), withSamples(&custom))
+		require.NoError(t, err)
 	}
-	if first := custom[0].pos; first < cursorBuffer || first >= cursorBuffer+interval {
-		t.Fatalf("with a %d-byte interval, baseline at %d bytes of tokens, want from %d to %d", interval, first, cursorBuffer, cursorBuffer+interval)
+	{
+		first := custom[0].pos
+		require.Falsef(t, first < cursorBuffer || first >= cursorBuffer+interval, "with a %d-byte interval, baseline at %d bytes of tokens, want from %d to %d", interval, first, cursorBuffer, cursorBuffer+interval)
 	}
 	for i := 1; i < len(custom)-1; i++ {
-		if gap := custom[i].pos - custom[i-1].pos; gap <= 0 || gap >= 2*interval {
-			t.Fatalf("samples %d and %d are %d bytes of tokens apart, want about %d", i-1, i, gap, interval)
+		{
+			gap := custom[i].pos - custom[i-1].pos
+			require.Falsef(t, gap <= 0 || gap >= 2*interval, "samples %d and %d are %d bytes of tokens apart, want about %d", i-1, i, gap, interval)
 		}
 	}
 
@@ -468,9 +448,7 @@ func TestBaselineRule(t *testing.T) {
 		{"no interval after the boundary", NewGenerator(1, lineRecord, WithBudget(96<<10)), 1 << 20},
 	} {
 		_, err := run(newLineScanner, c.src, WithSampleEvery(c.every), withBaselineAfter(cursorBuffer))
-		if err == nil || !strings.Contains(err.Error(), "no growth was checked") || !strings.Contains(err.Error(), "one cursor buffer") {
-			t.Fatalf("%s: got error %v, want the baseline error", c.name, err)
-		}
+		require.Falsef(t, err == nil || !strings.Contains(err.Error(), "no growth was checked") || !strings.Contains(err.Error(), "one cursor buffer"), "%s: got error %v, want the baseline error", c.name, err)
 	}
 }
 
@@ -480,14 +458,11 @@ func TestRecords(t *testing.T) {
 	const n = 4 << 10
 	head := Records(5, lineRecord, n)
 	stream := readAll(t, NewGenerator(5, lineRecord, WithBudget(64<<10)))
-	if len(head) < n {
-		t.Fatalf("Records returned %d bytes, want at least %d", len(head), n)
-	}
-	if !bytes.HasPrefix(stream, head) {
-		t.Fatal("Records is not a prefix of the generated stream of the same seed")
-	}
-	if last := bytes.LastIndexByte(head[:len(head)-1], '\n'); last+1 >= n {
-		t.Fatalf("Records holds %d bytes before its last record, want fewer than %d", last+1, n)
+	require.Falsef(t, len(head) < n, "Records returned %d bytes, want at least %d", len(head), n)
+	require.True(t, bytes.HasPrefix(stream, head), "Records is not a prefix of the generated stream of the same seed")
+	{
+		last := bytes.LastIndexByte(head[:len(head)-1], '\n')
+		require.Falsef(t, last+1 >= n, "Records holds %d bytes before its last record, want fewer than %d", last+1, n)
 	}
 }
 
@@ -497,15 +472,17 @@ func TestPrefix(t *testing.T) {
 	gen := NewGenerator(1, lineRecord, WithBudget(16<<10))
 	clean := readAll(t, NewGenerator(1, lineRecord, WithBudget(16<<10)))
 	src := Prefix(gen, []byte("a=b\n"), nil, []byte("c=d\n"))
-	if got, want := src.Budget(), int64(8+16<<10); got != want {
-		t.Fatalf("budget is %d, want %d", got, want)
+	{
+		got, want := src.Budget(), int64(8+16<<10)
+		require.Truef(t, got == want, "budget is %d, want %d", got, want)
 	}
 	got := readAll(t, src)
-	if want := append([]byte("a=b\nc=d\n"), clean...); !bytes.Equal(got, want) {
-		t.Fatal("the prefixed stream is not the heads followed by the generated stream")
+	{
+		want := append([]byte("a=b\nc=d\n"), clean...)
+		require.True(t, bytes.Equal(got, want), "the prefixed stream is not the heads followed by the generated stream")
 	}
 	if src := Prefix(NewGenerator(1, lineRecord, WithBudget(16<<10))); src.Budget() != 16<<10 {
-		t.Fatalf("budget with no head is %d, want %d", src.Budget(), 16<<10)
+		require.FailNowf(t, "unexpected test state", "budget with no head is %d, want %d", src.Budget(), 16<<10)
 	}
 }
 
@@ -545,15 +522,13 @@ func TestLexAll(t *testing.T) {
 		got = append(got, string(l.Type())+":"+l.Text())
 	}
 	if want := "WORD:a EQUALS:= WORD:b SPACE:  WORD:c NEWLINE:\n"; strings.Join(got, " ") != want {
-		t.Fatalf("tokens = %q, want %q", strings.Join(got, " "), want)
+		require.FailNowf(t, "unexpected test state", "tokens = %q, want %q", strings.Join(got, " "), want)
 	}
 
 	guarded := bytescan.NewWithOptions(strings.NewReader("a=b\n"+strings.Repeat("x", 2*TextGuard)), bytescan.WithMaxTokenBytes(TextGuard))
 	guarded.MustAddRule("ANY", core.RuneRunMax(core.AnyRune, 2*TextGuard))
 	msg := fails(t, func(tb testing.TB) { LexAll(tb, guarded) })
-	if !strings.Contains(msg, "after 0 tokens") {
-		t.Fatalf("LexAll over a scanner that fails: got %q, want a failure after 0 tokens", msg)
-	}
+	require.Truef(t, strings.Contains(msg, "after 0 tokens"), "LexAll over a scanner that fails: got %q, want a failure after 0 tokens", msg)
 }
 
 // TestLexRetained proves the release check: over a cursor that retains 1 KiB,
@@ -564,13 +539,12 @@ func TestLexRetained(t *testing.T) {
 	released := func(cur bytescan.Cursor) *twoScanners { return newTwoScannersOn(cur, true) }
 	leaky := func(cur bytescan.Cursor) *twoScanners { return newTwoScannersOn(cur, false) }
 
-	if ls := LexRetained(t, bufio.NewReader(bytes.NewReader(input)), 1<<10, released); len(ls) == 0 {
-		t.Fatal("no tokens")
+	{
+		ls := LexRetained(t, bufio.NewReader(bytes.NewReader(input)), 1<<10, released)
+		require.False(t, len(ls) == 0, "no tokens")
 	}
 	msg := fails(t, func(tb testing.TB) {
 		LexRetained(tb, bufio.NewReader(bytes.NewReader(input)), 1<<10, leaky)
 	})
-	if !strings.Contains(msg, cursor.ErrRetentionExceeded.Error()) {
-		t.Fatalf("LexRetained without the Release: got %q, want the retention error", msg)
-	}
+	require.Truef(t, strings.Contains(msg, cursor.ErrRetentionExceeded.Error()), "LexRetained without the Release: got %q, want the retention error", msg)
 }

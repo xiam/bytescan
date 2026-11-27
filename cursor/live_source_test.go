@@ -160,11 +160,9 @@ func readLive(t *testing.T, n int, blocked <-chan struct{}, read func() (liveRun
 				require.NoError(t, res.err)
 				got = append(got, res.lr)
 			}
-			if len(got) < n {
-				t.Fatalf("the source blocked after %d of %d runes: the cursor held back input that had arrived", len(got), n)
-			}
+			require.Falsef(t, len(got) < n, "the source blocked after %d of %d runes: the cursor held back input that had arrived", len(got), n)
 		case <-timeout:
-			t.Fatalf("timed out after %d of %d runes", len(got), n)
+			require.FailNowf(t, "unexpected test state", "timed out after %d of %d runes", len(got), n)
 		}
 	}
 
@@ -267,9 +265,9 @@ func TestLiveReaderWaitsForIncompleteSequence(t *testing.T) {
 	select {
 	case <-src.blocked:
 	case res := <-results:
-		t.Fatalf("the cursor returned %q from a proper prefix of a 2-byte sequence", res.lr.r)
+		require.FailNowf(t, "unexpected test state", "the cursor returned %q from a proper prefix of a 2-byte sequence", res.lr.r)
 	case <-time.After(liveTimeout):
-		t.Fatal("timed out waiting for the cursor to read the source")
+		require.FailNow(t, "timed out waiting for the cursor to read the source")
 	}
 	require.Empty(t, results, "no rune is returned while the sequence is incomplete")
 
@@ -279,7 +277,7 @@ func TestLiveReaderWaitsForIncompleteSequence(t *testing.T) {
 	select {
 	case res = <-results:
 	case <-time.After(liveTimeout):
-		t.Fatal("timed out waiting for the completed rune")
+		require.FailNow(t, "timed out waiting for the completed rune")
 	}
 	require.NoError(t, res.err)
 	assert.Equal(t, 'é', res.lr.r)
@@ -314,9 +312,7 @@ func TestLiveReaderPeeksArrivedRune(t *testing.T) {
 		if err != nil {
 			return read, err
 		}
-		if peeked != read {
-			t.Errorf("peeked %v, read %v", peeked, read)
-		}
+		assert.Truef(t, peeked == read, "peeked %v, read %v", peeked, read)
 		return peeked, nil
 	}
 
@@ -350,9 +346,9 @@ func TestLiveRuneSourceReturnsArrivedRunes(t *testing.T) {
 	select {
 	case <-src.blocked:
 	case res := <-peeked:
-		t.Fatalf("peek returned %v without a rune from the source", res)
+		require.FailNowf(t, "unexpected test state", "peek returned %v without a rune from the source", res)
 	case <-time.After(liveTimeout):
-		t.Fatal("timed out waiting for the cursor to read the source")
+		require.FailNow(t, "timed out waiting for the cursor to read the source")
 	}
 
 	src.runes <- '🦄'
@@ -362,6 +358,6 @@ func TestLiveRuneSourceReturnsArrivedRunes(t *testing.T) {
 		assert.Equal(t, '🦄', res.lr.r)
 		assert.Equal(t, 10, res.lr.pos.ByteOffset())
 	case <-time.After(liveTimeout):
-		t.Fatal("timed out waiting for the peeked rune")
+		require.FailNow(t, "timed out waiting for the peeked rune")
 	}
 }
