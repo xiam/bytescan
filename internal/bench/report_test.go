@@ -151,8 +151,8 @@ func render(t *testing.T, lanes map[Lane]map[string]stat, cost delta, status cas
 		cases: []caseReport{{
 			c: c, bytes: 4880944, status: status, lanes: lanes, rules: 12,
 			wrapperCost: cost, counterCost: cost, wrapped: result{Tokens: 10},
-			refs:       map[tool]map[string]stat{textScanner: lanes[Control], regexpLexer: lanes[Control]},
-			refResults: map[tool]refResult{textScanner: {Tokens: 8, Errors: 2}, regexpLexer: {Tokens: 10}},
+			refs:       map[tool]map[string]stat{textScanner: lanes[Control], regexpLexer: lanes[Control], jsonDecoder: lanes[Control]},
+			refResults: map[tool]refResult{textScanner: {Tokens: 8, Errors: 2}, regexpLexer: {Tokens: 10}, jsonDecoder: {Tokens: 6}},
 		}},
 	}
 	r.cases[0].wrapped.Counts.Tokens = 10
@@ -290,7 +290,9 @@ func TestReferenceSummary(t *testing.T) {
 	for _, want := range []string{
 		"| textscanner | 2 µs | ± 5 % (CI ± 0 %) | 2440472.00 MB/s | 4 | 200 | 8 | 2 |",
 		"| regexp | 2 µs | ± 5 % (CI ± 0 %) | 2440472.00 MB/s | 4 | 200 | 10 | 0 |",
+		"| jsondecoder | 2 µs | ± 5 % (CI ± 0 %) | 2440472.00 MB/s | 4 | 200 | 6 | 0 |",
 		referenceNotes,
+		"The Tokens column counts returned decoder events.",
 	} {
 		if !strings.Contains(md, want) {
 			t.Errorf("the report has no %q:\n%s", want, md)

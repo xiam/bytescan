@@ -22,6 +22,11 @@ type rulesProcessor struct {
 	// tie-break of equal matches (pickBestMatch).
 	states []ruleState
 
+	// soleSlot is the sole active state index plus one, or zero when the
+	// active set is not known to have exactly one member. Other states may
+	// still hold earlier accepts, so pickBestMatch uses all slots.
+	soleSlot int
+
 	// ctr points at the engine counters of the scanner in the build with the
 	// tag bench, and is empty in the normal build (counters_on.go,
 	// counters_off.go). It is not the last field, so its size of zero in the
@@ -93,6 +98,7 @@ func newRulesProcessor(rules []TokenType, initialStates map[TokenType]Rule) *rul
 }
 
 func (rp *rulesProcessor) Reset() {
+	rp.soleSlot = 0
 	rp.buf = rp.buf[:0]
 	rp.wide = rp.wide[:0]
 	for i := range rp.states {
@@ -147,7 +153,12 @@ func (rp *rulesProcessor) processSymbol(s Symbol) int {
 	// calls and pushbacks feed the engine counters only: the normal build
 	// drops them with the inlined empty call below.
 	activeRules, calls, pushbacks := 0, 0, 0
-	for i := range rp.states {
+	first, end := 0, len(rp.states)
+	if rp.soleSlot != 0 {
+		first, end = rp.soleSlot-1, rp.soleSlot
+	}
+	lastActive := 0
+	for i := first; i < end; i++ {
 		var pushbackCount int
 
 		state := &rp.states[i]
@@ -190,11 +201,16 @@ func (rp *rulesProcessor) processSymbol(s Symbol) int {
 		if keepActive && !atEOF {
 			state.rule = nextRule
 			activeRules++
+			lastActive = i + 1
 		} else {
 			state.isActive = false
 		}
 	}
 
+	rp.soleSlot = 0
+	if activeRules == 1 {
+		rp.soleSlot = lastActive
+	}
 	rp.ctr.step(calls+pushbacks, pushbacks, activeRules)
 
 	return activeRules

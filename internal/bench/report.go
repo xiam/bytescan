@@ -217,12 +217,9 @@ func (r *Report) WriteMarkdown(w io.Writer) error {
 	p.f("no difference under %s percent is claimed between reports. The rerun rule uses the CI. ", trimFloat(spreadFloor))
 	p.f("The report gives no arithmetic mean. ")
 	p.f("Each run is one process that lexes one case once in one lane. ")
-	p.f("A round runs the three lanes of a case one after the other, and the first lane of a round rotates: ")
-	p.f("control, wrapped, instrumented in the first round, wrapped, instrumented, control in the second, ")
-	p.f("instrumented, control, wrapped in the third, and so on. ")
-	p.f("On a text case, a round also runs the two outside references after the instrumented lane, ")
-	p.f("and the rotation goes over the five runs: control, wrapped, instrumented, textscanner, regexp in the first round, ")
-	p.f("wrapped, instrumented, textscanner, regexp, control in the second, and so on. ")
+	p.f("The first round runs control, wrapped and instrumented, followed by the case's outside references. ")
+	p.f("Text cases run textscanner and regexp. The json case adds jsondecoder after regexp. ")
+	p.f("Each subsequent round starts one position later in this order and wraps around. ")
 	p.f("The spread limit and the rerun apply to the references as to the lanes. ")
 	p.f("Two reports of the same commit on the same machine should have control medians that differ by less than their reported spread, ")
 	p.f("or the case is marked inconclusive. This is a check of the procedure, not a statistical guarantee.\n")
@@ -346,6 +343,11 @@ func (c *caseReport) writeReferences(p *printer) {
 			group(uint64(s[unitAllocs].Median+0.5)), group(uint64(s[unitBytes].Median+0.5)), group(res.Tokens), group(res.Errors))
 	}
 	p.f("\n%s", referenceNotes)
+	if _, ok := c.refs[jsonDecoder]; ok {
+		p.f("\n**jsondecoder** calls the standard library's `encoding/json.Decoder.Token` through EOF. ")
+		p.f("It reads both JSON documents in sequence, checks delimiter nesting as it reads, and decodes scalar values. ")
+		p.f("The Tokens column counts returned decoder events. The stream omits whitespace, commas and colons, and the events carry no Bytescan spans.\n")
+	}
 }
 
 // mapLookups is the derived count of keyed lookups by token type of
