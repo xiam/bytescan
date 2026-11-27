@@ -105,7 +105,7 @@ func parseEdit(t *testing.T, s string) Edit {
 		a, b := rng(f[1])
 		return Edit{Start: a, End: b, Text: []byte(plain(f[3]))}
 	}
-	t.Fatalf("bad edit %q", s)
+	require.FailNowf(t, "unexpected test state", "bad edit %q", s)
 	return Edit{}
 }
 

@@ -9,7 +9,6 @@ import (
 	"testing"
 
 	"github.com/stretchr/testify/assert"
-	"github.com/stretchr/testify/require"
 
 	"github.com/xiam/bytescan"
 )
@@ -58,7 +57,7 @@ func TestScannerConcurrentAccess(t *testing.T) {
 	close(errorsChan)
 
 	for err := range errorsChan {
-		t.Errorf("Received unexpected error from Next(): %v", err)
+		assert.NoError(t, err, "Received unexpected error from Next()")
 	}
 
 	tokenCount := 0
@@ -102,7 +101,9 @@ func TestScannerConcurrentDeterminism(t *testing.T) {
 					if err == io.EOF {
 						return
 					}
-					require.NoError(t, err)
+					if !assert.NoError(t, err) {
+						return
+					}
 
 					mu.Lock()
 					tokens = append(tokens, lex)

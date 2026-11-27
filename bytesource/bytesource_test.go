@@ -6,6 +6,8 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
 	"github.com/xiam/bytescan"
 	"github.com/xiam/bytescan/rules/core"
 )
@@ -22,11 +24,13 @@ func allBytes() []byte {
 func TestTextBytes(t *testing.T) {
 	b := allBytes()
 	text := Text(string(b))
-	if n := len([]rune(text)); n != 256 {
-		t.Fatalf("Text gives %d runes, want 256", n)
+	{
+		n := len([]rune(text))
+		require.Truef(t, n == 256, "Text gives %d runes, want 256", n)
 	}
-	if got := Bytes(text); !bytes.Equal(got, b) {
-		t.Errorf("Bytes(Text(b)) = % x, want % x", got, b)
+	{
+		got := Bytes(text)
+		assert.Truef(t, bytes.Equal(got, b), "Bytes(Text(b)) = % x, want % x", got, b)
 	}
 }
 
@@ -43,9 +47,7 @@ func TestOffsets(t *testing.T) {
 		if err == io.EOF {
 			break
 		}
-		if err != nil {
-			t.Fatal(err)
-		}
+		require.NoError(t, err)
 		got = append(got, Hex(l))
 	}
 	want := []string{
@@ -56,40 +58,41 @@ func TestOffsets(t *testing.T) {
 		"5 SOI 2 ff d8",
 	}
 	if strings.Join(got, "\n") != strings.Join(want, "\n") {
-		t.Errorf("got\n%s\nwant\n%s", strings.Join(got, "\n"), strings.Join(want, "\n"))
+		assert.Failf(t, "unexpected test state", "got\n%s\nwant\n%s", strings.Join(got, "\n"), strings.Join(want, "\n"))
 	}
 }
 
 func TestHexLong(t *testing.T) {
 	l := bytescan.NewTokenFromString("DATA", Text(string(allBytes()[:20])), 7)
 	want := "7 DATA 20 00 01 02 03 04 05 06 07 08 09 0a 0b 0c 0d 0e 0f ..."
-	if got := Hex(l); got != want {
-		t.Errorf("Hex = %q, want %q", got, want)
+	{
+		got := Hex(l)
+		assert.Truef(t, got == want, "Hex = %q, want %q", got, want)
 	}
 }
 
 func TestPeekRead(t *testing.T) {
 	cur := NewCursor(bytes.NewReader([]byte{1, 2, 3, 0xFE, 5}))
 	p, err := Peek(cur, 2)
-	if err != nil || !bytes.Equal(p, []byte{1, 2}) {
-		t.Fatalf("Peek = % x, %v", p, err)
-	}
+	require.Falsef(t, err != nil || !bytes.Equal(p, []byte{1, 2}), "Peek = % x, %v", p, err)
 	l, err := Read(cur, "A", 4)
-	if err != nil {
-		t.Fatal(err)
+	require.NoError(t, err)
+	{
+		got := Hex(l)
+		assert.Truef(t, got == "0 A 4 01 02 03 fe", "Read = %q", got)
 	}
-	if got := Hex(l); got != "0 A 4 01 02 03 fe" {
-		t.Errorf("Read = %q", got)
-	}
-	if p, _ := Peek(cur, 3); !bytes.Equal(p, []byte{5}) {
-		t.Errorf("Peek at the end = % x, want 05", p)
+	{
+		p, _ := Peek(cur, 3)
+		assert.Truef(t, bytes.Equal(p, []byte{5}), "Peek at the end = % x, want 05", p)
 	}
 	l, _ = Read(cur, "B", 3)
-	if got := Hex(l); got != "4 B 1 05" {
-		t.Errorf("short Read = %q", got)
+	{
+		got := Hex(l)
+		assert.Truef(t, got == "4 B 1 05", "short Read = %q", got)
 	}
-	if l, err := Read(cur, "C", 1); l != nil || err != nil {
-		t.Errorf("Read at the end = %v, %v; want nil, nil", l, err)
+	{
+		l, err := Read(cur, "C", 1)
+		assert.Falsef(t, l != nil || err != nil, "Read at the end = %v, %v; want nil, nil", l, err)
 	}
 }
 
@@ -108,9 +111,7 @@ func TestFields(t *testing.T) {
 	var got []string
 	for {
 		l, err := f.NextField()
-		if err != nil {
-			t.Fatal(err)
-		}
+		require.NoError(t, err)
 		if l == nil {
 			break
 		}
@@ -118,19 +119,18 @@ func TestFields(t *testing.T) {
 	}
 	want := "0 A 2 61 62|2 B 1 63|3 C 1 64"
 	if strings.Join(got, "|") != want {
-		t.Errorf("fields = %q, want %q", strings.Join(got, "|"), want)
+		assert.Failf(t, "unexpected test state", "fields = %q, want %q", strings.Join(got, "|"), want)
 	}
-	if strings.Join(then, "|") != "empty|ab" {
-		t.Errorf("Then calls = %q", then)
-	}
+	assert.Truef(t, strings.Join(then, "|") == "empty|ab", "Then calls = %q", then)
 
 	// A field cut by the end of the input drops the rest of the queue.
 	f.Push(Field{Type: "D", Len: 5}, Field{Type: "E", Len: 1})
 	l, _ := f.NextField()
-	if got := Hex(l); got != "4 D 3 65 66 67" {
-		t.Errorf("short field = %q", got)
+	{
+		got := Hex(l)
+		assert.Truef(t, got == "4 D 3 65 66 67", "short field = %q", got)
 	}
 	if l, _ := f.NextField(); l != nil {
-		t.Errorf("after a short field: %q, want nil", Hex(l))
+		assert.Failf(t, "unexpected test state", "after a short field: %q, want nil", Hex(l))
 	}
 }

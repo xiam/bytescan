@@ -58,7 +58,7 @@ func drain(t *testing.T, src bytescan.Source) ([]bytescan.TokenType, error) {
 		require.NotNil(t, l, "a Source returns a token with a nil error")
 		types = append(types, l.Type())
 	}
-	t.Fatal("source did not end")
+	require.FailNow(t, "source did not end")
 	return nil, nil
 }
 

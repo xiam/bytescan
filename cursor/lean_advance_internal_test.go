@@ -1,12 +1,13 @@
 package cursor
 
 import (
-	"errors"
 	"fmt"
 	"io"
 	"strings"
 	"testing"
 
+	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
 	"github.com/xiam/bytescan/internal/leanread"
 )
 
@@ -61,26 +62,24 @@ func TestLeanAdvanceCheck(t *testing.T) {
 		r := NewReader(strings.NewReader("ab\ncd e"))
 		lean, _ := leanread.Of(r)
 		dst := make([]leanread.Rune, 8)
-		if _, _, err := lean.Peek(0, dst); err != nil {
-			t.Fatal(err)
+		{
+			_, _, err := lean.Peek(0, dst)
+			require.NoError(t, err)
 		}
 		_, err := lean.(leanread.Advancer[Pos]).Advance(5, ext)
-		if !errors.Is(err, errAdvanceMismatch) {
-			t.Errorf("Advance(5, %+v) = %v, want errAdvanceMismatch", ext, err)
-		}
+		assert.ErrorIsf(t, err, errAdvanceMismatch, "Advance(5, %+v) = %v, want errAdvanceMismatch", ext, err)
 	}
 
 	r := NewReader(strings.NewReader("ab\ncd e"))
 	lean, _ := leanread.Of(r)
 	dst := make([]leanread.Rune, 8)
-	if _, _, err := lean.Peek(0, dst); err != nil {
-		t.Fatal(err)
+	{
+		_, _, err := lean.Peek(0, dst)
+		require.NoError(t, err)
 	}
 	got, err := lean.(leanread.Advancer[Pos]).Advance(5, leanread.Extent{Runes: 5, Lines: 1, Column: 2})
 	want := Pos{byteOffset: 5, runeOffset: 5, line: 2, column: 2}
-	if err != nil || got != want {
-		t.Errorf("Advance(5) = %+v, %v; want %+v", got, err, want)
-	}
+	assert.Falsef(t, err != nil || got != want, "Advance(5) = %+v, %v; want %+v", got, err, want)
 }
 
 // TestLeanAdvanceIsSeekOutsideTheBuffer checks that Advance over bytes that
@@ -95,14 +94,12 @@ func TestLeanAdvanceIsSeekOutsideTheBuffer(t *testing.T) {
 		runes := []rune(text[:min(n, len(text))])
 		got, errA := lean.(leanread.Advancer[Pos]).Advance(n, extentOf(runes))
 		_, errB := b.Seek(int64(n), io.SeekCurrent)
-		if errText(errA) != errText(errB) {
-			t.Fatalf("n=%d: Advance error %v, Seek error %v", n, errA, errB)
-		}
+		require.Truef(t, errText(errA) == errText(errB), "n=%d: Advance error %v, Seek error %v", n, errA, errB)
 		if a.Cursor() != b.Cursor() {
-			t.Fatalf("n=%d: cursor after Advance %+v, after Seek %+v", n, a.Cursor(), b.Cursor())
+			require.FailNowf(t, "unexpected test state", "n=%d: cursor after Advance %+v, after Seek %+v", n, a.Cursor(), b.Cursor())
 		}
 		if errA == nil && got != b.Cursor() {
-			t.Fatalf("n=%d: Advance returned %+v, want %+v", n, got, b.Cursor())
+			require.FailNowf(t, "unexpected test state", "n=%d: Advance returned %+v, want %+v", n, got, b.Cursor())
 		}
 	}
 }

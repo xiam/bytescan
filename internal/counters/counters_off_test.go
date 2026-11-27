@@ -6,6 +6,8 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
 	"github.com/xiam/bytescan"
 	"github.com/xiam/bytescan/cursor"
 	"github.com/xiam/bytescan/internal/counters"
@@ -15,13 +17,13 @@ import (
 // set and OfCursor and OfScanner return false (docs/specs/measurement.md, "How
 // the harness reads the counters").
 func TestNoCountersInTheNormalBuild(t *testing.T) {
-	if counters.CursorHook != nil || counters.ScannerHook != nil {
-		t.Fatal("a hook is set in the normal build")
+	require.False(t, counters.CursorHook != nil || counters.ScannerHook != nil, "a hook is set in the normal build")
+	{
+		c, ok := counters.OfCursor(cursor.New(strings.NewReader("a")))
+		assert.Falsef(t, ok || c != (counters.Cursor{}), "OfCursor = %+v, %v; want the zero Cursor and false", c, ok)
 	}
-	if c, ok := counters.OfCursor(cursor.New(strings.NewReader("a"))); ok || c != (counters.Cursor{}) {
-		t.Errorf("OfCursor = %+v, %v; want the zero Cursor and false", c, ok)
-	}
-	if s, ok := counters.OfScanner(bytescan.New(strings.NewReader("a"))); ok || s != (counters.Scanner{}) {
-		t.Errorf("OfScanner = %+v, %v; want the zero Scanner and false", s, ok)
+	{
+		s, ok := counters.OfScanner(bytescan.New(strings.NewReader("a")))
+		assert.Falsef(t, ok || s != (counters.Scanner{}), "OfScanner = %+v, %v; want the zero Scanner and false", s, ok)
 	}
 }

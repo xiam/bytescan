@@ -6,6 +6,9 @@ import (
 	"runtime"
 	"strings"
 	"testing"
+
+	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
 )
 
 const (
@@ -19,7 +22,7 @@ func goList(t *testing.T, args ...string) string {
 	goCmd := filepath.Join(runtime.GOROOT(), "bin", "go")
 	out, err := exec.Command(goCmd, append([]string{"list"}, args...)...).CombinedOutput()
 	if err != nil {
-		t.Fatalf("go list %s: %v\n%s", strings.Join(args, " "), err, out)
+		require.FailNowf(t, "unexpected test state", "go list %s: %v\n%s", strings.Join(args, " "), err, out)
 	}
 	return string(out)
 }
@@ -67,11 +70,9 @@ func TestNormalBuildHasNoCounters(t *testing.T) {
 		files := goFiles(t, b.tags...)
 		for _, pkg := range []string{rootPath, cursorPath} {
 			if !contains(files[pkg], b.want) {
-				t.Errorf("go list %v: %s compiles %v, want %s among them", b.tags, pkg, files[pkg], b.want)
+				assert.Failf(t, "unexpected test state", "go list %v: %s compiles %v, want %s among them", b.tags, pkg, files[pkg], b.want)
 			}
-			if contains(files[pkg], b.not) {
-				t.Errorf("go list %v: %s compiles %s", b.tags, pkg, b.not)
-			}
+			assert.Falsef(t, contains(files[pkg], b.not), "go list %v: %s compiles %s", b.tags, pkg, b.not)
 		}
 	}
 }
@@ -100,19 +101,15 @@ func TestCoreDoesNotImportMeasurement(t *testing.T) {
 	}
 
 	deps := strings.Fields(goList(t, append([]string{"-deps"}, core...)...))
-	if !contains(deps, "github.com/xiam/bytescan/modes") {
-		t.Fatalf("go list -deps does not list modes: %v", deps)
-	}
+	require.Truef(t, contains(deps, "github.com/xiam/bytescan/modes"), "go list -deps does not list modes: %v", deps)
 	for _, dep := range deps {
 		for _, m := range measurement {
-			if dep == m || strings.HasPrefix(dep, m+"/") {
-				t.Errorf("the normal build of the core depends on %s", dep)
-			}
+			assert.Falsef(t, dep == m || strings.HasPrefix(dep, m+"/"), "the normal build of the core depends on %s", dep)
 		}
 	}
 
 	tagged := strings.Fields(goList(t, "-tags", "bench", "-deps", rootPath, cursorPath))
 	if !contains(tagged, measurement[0]) {
-		t.Errorf("the build with the tag bench does not import %s", measurement[0])
+		assert.Failf(t, "unexpected test state", "the build with the tag bench does not import %s", measurement[0])
 	}
 }

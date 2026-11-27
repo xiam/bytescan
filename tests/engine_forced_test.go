@@ -5,6 +5,8 @@ import (
 	"path/filepath"
 	"runtime"
 	"testing"
+
+	"github.com/stretchr/testify/require"
 )
 
 // TestOraclesWithEngineForced runs the oracle tests of this package, and the
@@ -24,8 +26,6 @@ func TestOraclesWithEngineForced(t *testing.T) {
 	cmd := exec.Command(goCmd, "test", "-count=1", "-tags", "coreengine",
 		"-run", "Oracle|^TestReferencesLex$", ".", "../internal/bench")
 	out, err := cmd.CombinedOutput()
-	if err != nil {
-		t.Fatalf("go test -tags coreengine: %v\n%s", err, out)
-	}
+	require.NoErrorf(t, err, "go test -tags coreengine: %v\n%s", err, out)
 	t.Logf("go test -tags coreengine:\n%s", out)
 }

@@ -601,7 +601,7 @@ func TestByteReaderDoesNotWaitForMoreBytes(t *testing.T) {
 			assert.Equal(t, rune(b), res.lr.Rune())
 			assert.Equal(t, i, res.lr.Pos().ByteOffset())
 		case <-time.After(10 * time.Second):
-			t.Fatalf("read of byte %d did not return after the source delivered it", i)
+			require.FailNowf(t, "unexpected test state", "read of byte %d did not return after the source delivered it", i)
 		}
 	}
 }

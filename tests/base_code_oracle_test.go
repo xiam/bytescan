@@ -1,7 +1,6 @@
 package tests
 
 import (
-	"errors"
 	"io"
 	"regexp"
 	"strings"
@@ -189,7 +188,7 @@ func checkCodeOracleRows(t *testing.T, rows []codeOracleRow) {
 				if got != want {
 					mismatches++
 					if mismatches <= 5 {
-						t.Errorf("on %q the first match is %q, want %q", input, got, want)
+						assert.Failf(t, "mismatch", "on %q the first match is %q, want %q", input, got, want)
 					}
 				}
 			}
@@ -198,7 +197,7 @@ func checkCodeOracleRows(t *testing.T, rows []codeOracleRow) {
 			lx := bytescan.New(strings.NewReader(""))
 			lx.MustAddRule(lexTypeCode, row.rule)
 			lex, err := lx.Next()
-			assert.True(t, errors.Is(err, io.EOF), "Next on empty input: %v", err)
+			assert.ErrorIs(t, err, io.EOF, "Next on empty input: %v", err)
 			assert.Nil(t, lex)
 
 			assert.True(t, matched, "row has no matching input")

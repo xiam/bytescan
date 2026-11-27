@@ -300,9 +300,7 @@ func TestOpenTokenLiveHeap(t *testing.T) {
 
 	lex, err := lx.Next()
 	require.NoError(t, err)
-	if over {
-		t.Fatalf("heap passed %d MiB above the baseline before the last rune", openTokenHeapLimit>>20)
-	}
+	require.Falsef(t, over, "heap passed %d MiB above the baseline before the last rune", openTokenHeapLimit>>20)
 	require.NotZero(t, live, "the probe did not reach the last rune")
 
 	// No rule matches, so the first token is the quote as one UNKNOWN rune.

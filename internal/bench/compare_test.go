@@ -11,6 +11,9 @@ import (
 	"strings"
 	"testing"
 	"time"
+
+	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
 )
 
 // writeSide writes the raw file of one side of case json in the format of the
@@ -23,8 +26,9 @@ func writeSide(t *testing.T, dir, sideName string, ns []float64) string {
 		fmt.Fprintf(&b, "BenchmarkCase/json-12 \t       1\t%.0f ns/op\t     100 B/op\t       3 allocs/op\nPASS\n", v)
 	}
 	path := compareFile(dir, "json", sideName)
-	if err := os.WriteFile(path, b.Bytes(), 0o644); err != nil {
-		t.Fatal(err)
+	{
+		err := os.WriteFile(path, b.Bytes(), 0o644)
+		require.NoError(t, err)
 	}
 	return path
 }
@@ -44,9 +48,7 @@ func compareFixture(t *testing.T, base, head []float64, rerun bool) (compareCase
 	t.Helper()
 	dir := t.TempDir()
 	cmp, err := benchstatBy(".file", writeSide(t, dir, sideBase, base), writeSide(t, dir, sideHead, head))
-	if err != nil {
-		t.Fatal(err)
-	}
+	require.NoError(t, err)
 	status, ok := rerunRule(aboveLimit(cmp.first[unitTime]) || aboveLimit(cmp.second[unitTime]), rerun)
 	return compareCase{name: "json", bytes: 1000, status: status, cmp: cmp}, ok
 }
@@ -76,8 +78,9 @@ func fixedReport(sameTree bool, cs ...compareCase) *compareReport {
 func writeReport(t *testing.T, r *compareReport) string {
 	t.Helper()
 	var b bytes.Buffer
-	if err := writeCompare(&b, r); err != nil {
-		t.Fatal(err)
+	{
+		err := writeCompare(&b, r)
+		require.NoError(t, err)
 	}
 	return b.String()
 }
@@ -85,9 +88,7 @@ func writeReport(t *testing.T, r *compareReport) string {
 func wantLines(t *testing.T, md string, want ...string) {
 	t.Helper()
 	for _, w := range want {
-		if !strings.Contains(md, w) {
-			t.Errorf("the report has no %q:\n%s", w, md)
-		}
+		assert.Truef(t, strings.Contains(md, w), "the report has no %q:\n%s", w, md)
 	}
 }
 
@@ -99,11 +100,10 @@ func wantLines(t *testing.T, md string, want ...string) {
 func TestCompareFaster(t *testing.T) {
 	benchstatOrSkip(t)
 	c, ok := compareFixture(t, near(1000, 10), near(700, 10), false)
-	if !ok || c.status != conclusive {
-		t.Fatalf("rerun rule = %q, %v, want conclusive", c.status, ok)
-	}
-	if d := c.cmp.delta[unitTime]; !d.Significant || d.Percent > -25 || d.N != [2]int{10, 10} {
-		t.Fatalf("delta = %+v, want a significant change of about -30 percent with 10 and 10 samples", d)
+	require.Falsef(t, !ok || c.status != conclusive, "rerun rule = %q, %v, want conclusive", c.status, ok)
+	{
+		d := c.cmp.delta[unitTime]
+		require.Falsef(t, !d.Significant || d.Percent > -25 || d.N != [2]int{10, 10}, "delta = %+v, want a significant change of about -30 percent with 10 and 10 samples", d)
 	}
 	md := writeReport(t, fixedReport(false, c))
 	wantLines(t, md,
@@ -129,9 +129,7 @@ func TestCompareFaster(t *testing.T) {
 		"| B/op | not significant | 1.000 | 10, 10 |",
 		"Result: the head is faster than the base, -30.00 % (p=0.000), significant, at or above the 5 percent floor.",
 	)
-	if strings.Contains(md, "same-tree control") {
-		t.Errorf("a comparison of two trees is labelled a control:\n%s", md)
-	}
+	assert.Falsef(t, strings.Contains(md, "same-tree control"), "a comparison of two trees is labelled a control:\n%s", md)
 }
 
 // TestCompareNotSignificant checks a head inside the interval of the base:
@@ -139,17 +137,14 @@ func TestCompareFaster(t *testing.T) {
 func TestCompareNotSignificant(t *testing.T) {
 	benchstatOrSkip(t)
 	c, ok := compareFixture(t, near(1000, 10), near(1001, 10), false)
-	if !ok || c.status != conclusive {
-		t.Fatalf("rerun rule = %q, %v, want conclusive", c.status, ok)
-	}
-	if d := c.cmp.delta[unitTime]; d.Significant {
-		t.Fatalf("delta = %+v, want not significant", d)
+	require.Falsef(t, !ok || c.status != conclusive, "rerun rule = %q, %v, want conclusive", c.status, ok)
+	{
+		d := c.cmp.delta[unitTime]
+		require.Falsef(t, d.Significant, "delta = %+v, want not significant", d)
 	}
 	md := writeReport(t, fixedReport(false, c))
 	wantLines(t, md, "| time/op | not significant | ", "Result: not significant (p=")
-	if strings.Contains(md, "Result: the head is") || strings.Contains(md, "+0.00 %") || strings.Contains(md, "-0.00 %") {
-		t.Errorf("a not-significant change is written as a change:\n%s", md)
-	}
+	assert.Falsef(t, strings.Contains(md, "Result: the head is") || strings.Contains(md, "+0.00 %") || strings.Contains(md, "-0.00 %"), "a not-significant change is written as a change:\n%s", md)
 }
 
 // TestCompareRerun checks the rerun rule of a comparison: a side above the
@@ -158,23 +153,22 @@ func TestCompareNotSignificant(t *testing.T) {
 func TestCompareRerun(t *testing.T) {
 	benchstatOrSkip(t)
 	wide := []float64{800, 900, 1000, 1100, 1200, 1300, 700, 1400, 950, 1050}
-	if _, ok := compareFixture(t, near(1000, 10), wide, false); ok {
-		t.Error("a wide head before the rerun: no rerun")
+	{
+		_, ok := compareFixture(t, near(1000, 10), wide, false)
+		assert.False(t, ok, "a wide head before the rerun: no rerun")
 	}
-	if _, ok := compareFixture(t, wide, near(1000, 10), false); ok {
-		t.Error("a wide base before the rerun: no rerun")
+	{
+		_, ok := compareFixture(t, wide, near(1000, 10), false)
+		assert.False(t, ok, "a wide base before the rerun: no rerun")
 	}
 	c, ok := compareFixture(t, near(1000, 10), wide, true)
-	if !ok || c.status != inconclusive {
-		t.Fatalf("rerun rule after the rerun = %q, %v, want inconclusive", c.status, ok)
-	}
+	require.Falsef(t, !ok || c.status != inconclusive, "rerun rule after the rerun = %q, %v, want inconclusive", c.status, ok)
 	md := writeReport(t, fixedReport(false, c))
 	wantLines(t, md, "Status: **inconclusive**.", "Result: inconclusive.")
-	if strings.Contains(md, "MB/s") {
-		t.Errorf("an inconclusive case shows a rate:\n%s", md)
-	}
-	if c, ok := compareFixture(t, near(1000, 10), near(1000, 10), true); !ok || c.status != conclusiveAfterRerun {
-		t.Errorf("rerun rule after a good rerun = %q, %v, want conclusive after a rerun", c.status, ok)
+	assert.Falsef(t, strings.Contains(md, "MB/s"), "an inconclusive case shows a rate:\n%s", md)
+	{
+		c, ok := compareFixture(t, near(1000, 10), near(1000, 10), true)
+		assert.Falsef(t, !ok || c.status != conclusiveAfterRerun, "rerun rule after a good rerun = %q, %v, want conclusive after a rerun", c.status, ok)
 	}
 }
 
@@ -194,17 +188,16 @@ func TestCompareSameTreeControl(t *testing.T) {
 	biased, _ := compareFixture(t, near(1000, 10), near(900, 10), false)
 	md = writeReport(t, fixedReport(true, biased))
 	wantLines(t, md, "Result: a significant difference of -10.00 % (p=0.000) between two sides of the same tree. This is a measurement-bias finding about the runner or the harness, not a gain.")
-	if strings.Contains(md, "Result: the head is") {
-		t.Errorf("a control calls a difference a change of the head:\n%s", md)
-	}
+	assert.Falsef(t, strings.Contains(md, "Result: the head is"), "a control calls a difference a change of the head:\n%s", md)
 }
 
 // TestCompareUnderFloor checks a significant change under the 5 percent floor.
 func TestCompareUnderFloor(t *testing.T) {
 	r := fixedReport(false)
 	c := compareCase{status: conclusive, cmp: comparison{delta: map[string]delta{unitTime: {Percent: 3, Significant: true, P: 0.01}}}}
-	if got, want := r.result(&c), "Result: the head is slower than the base, +3.00 % (p=0.010), significant, under the 5 percent floor."; got != want {
-		t.Errorf("result = %q, want %q", got, want)
+	{
+		got, want := r.result(&c), "Result: the head is slower than the base, +3.00 % (p=0.010), significant, under the 5 percent floor."
+		assert.Truef(t, got == want, "result = %q, want %q", got, want)
 	}
 }
 
@@ -215,14 +208,13 @@ func TestCompareStatelex(t *testing.T) {
 	dir := t.TempDir()
 	base := writeEditSamples(t, dir, near(30000, 10))
 	other := filepath.Join(dir, "head")
-	if err := os.Mkdir(other, 0o755); err != nil {
-		t.Fatal(err)
+	{
+		err := os.Mkdir(other, 0o755)
+		require.NoError(t, err)
 	}
 	head := writeEditSamples(t, other, near(20000, 10))
 	cmp, err := benchstatBy(".file", base, head)
-	if err != nil {
-		t.Fatal(err)
-	}
+	require.NoError(t, err)
 	r := fixedReport(false, compareCase{name: "A-key-start-64KiB", status: conclusive, cmp: cmp})
 	r.statelex = true
 	md := writeReport(t, r)
@@ -236,31 +228,25 @@ func TestCompareStatelex(t *testing.T) {
 		"| copied-bytes/op | not significant | 1.000 | 10, 10 |",
 		"Result: the head is faster than the base",
 	)
-	if strings.Contains(md, "MB/s") {
-		t.Errorf("the statelex path gives a rate:\n%s", md)
-	}
+	assert.Falsef(t, strings.Contains(md, "MB/s"), "the statelex path gives a rate:\n%s", md)
 }
 
 // TestSelectCompare checks the cases of a comparison: reference cases or
 // statelex cases, not both.
 func TestSelectCompare(t *testing.T) {
 	cs, es, err := selectCompare("")
-	if err != nil || len(cs) != len(cases()) || es != nil {
-		t.Errorf("selectCompare(\"\") = %d, %d, %v, want every reference case", len(cs), len(es), err)
-	}
+	assert.Falsef(t, err != nil || len(cs) != len(cases()) || es != nil, "selectCompare(\"\") = %d, %d, %v, want every reference case", len(cs), len(es), err)
 	cs, es, err = selectCompare("json,code")
-	if err != nil || len(cs) != 2 || cs[1].name != "code" || es != nil {
-		t.Errorf("selectCompare(json,code) = %v, %v, %v", cs, es, err)
-	}
+	assert.Falsef(t, err != nil || len(cs) != 2 || cs[1].name != "code" || es != nil, "selectCompare(json,code) = %v, %v, %v", cs, es, err)
 	cs, es, err = selectCompare("A-key-start-64KiB,B-load-4MiB")
-	if err != nil || cs != nil || len(es) != 2 || es[1] != (editCase{"B", "load", "4MiB"}) {
-		t.Errorf("selectCompare(statelex) = %v, %v, %v", cs, es, err)
+	assert.Falsef(t, err != nil || cs != nil || len(es) != 2 || es[1] != (editCase{"B", "load", "4MiB"}), "selectCompare(statelex) = %v, %v, %v", cs, es, err)
+	{
+		_, _, err := selectCompare("json,A-key-start-64KiB")
+		assert.Falsef(t, err == nil || !strings.Contains(err.Error(), "not both"), "selectCompare(mixed) = %v, want a refusal", err)
 	}
-	if _, _, err := selectCompare("json,A-key-start-64KiB"); err == nil || !strings.Contains(err.Error(), "not both") {
-		t.Errorf("selectCompare(mixed) = %v, want a refusal", err)
-	}
-	if _, _, err := selectCompare("nope"); err == nil || !strings.Contains(err.Error(), `no case "nope"`) {
-		t.Errorf("selectCompare(nope) = %v, want a refusal", err)
+	{
+		_, _, err := selectCompare("nope")
+		assert.Falsef(t, err == nil || !strings.Contains(err.Error(), `no case "nope"`), "selectCompare(nope) = %v, want a refusal", err)
 	}
 }
 
@@ -275,8 +261,9 @@ func TestCompareFlags(t *testing.T) {
 		{[]string{"-base", "master", "-head", "master"}, "-base and -head need -kind compare"},
 		{[]string{"-kind", "compare", "-base", "a", "-head", "b", "-cases", "json,A-load-4MiB"}, "not both"},
 	} {
-		if err := runMain(c.args); err == nil || !strings.Contains(err.Error(), c.want) {
-			t.Errorf("runMain(%q) = %v, want %q", c.args, err, c.want)
+		{
+			err := runMain(c.args)
+			assert.Falsef(t, err == nil || !strings.Contains(err.Error(), c.want), "runMain(%q) = %v, want %q", c.args, err, c.want)
 		}
 	}
 }
@@ -286,9 +273,7 @@ func TestCompareFlags(t *testing.T) {
 func TestCompareNoBenchstat(t *testing.T) {
 	t.Setenv("PATH", t.TempDir())
 	err := runMain([]string{"-kind", "compare", "-base", "no-such-ref", "-head", "no-such-ref"})
-	if !errors.Is(err, errNoBenchstat) {
-		t.Errorf("runMain without benchstat = %v, want %v", err, errNoBenchstat)
-	}
+	assert.ErrorIsf(t, err, errNoBenchstat, "runMain without benchstat = %v, want %v", err, errNoBenchstat)
 }
 
 // gitRepo creates a git repository in a temporary directory with one module
@@ -306,17 +291,19 @@ func gitRepo(t *testing.T) string {
 		cmd.Dir = dir
 		cmd.Env = append(os.Environ(), "GIT_CONFIG_GLOBAL="+os.DevNull, "GIT_CONFIG_NOSYSTEM=1")
 		if out, err := cmd.CombinedOutput(); err != nil {
-			t.Fatalf("git %s: %v\n%s", strings.Join(args, " "), err, out)
+			require.FailNowf(t, "unexpected test state", "git %s: %v\n%s", strings.Join(args, " "), err, out)
 		}
 	}
 	write := func(name, text string) {
 		t.Helper()
 		path := filepath.Join(dir, name)
-		if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
-			t.Fatal(err)
+		{
+			err := os.MkdirAll(filepath.Dir(path), 0o755)
+			require.NoError(t, err)
 		}
-		if err := os.WriteFile(path, []byte(text), 0o644); err != nil {
-			t.Fatal(err)
+		{
+			err := os.WriteFile(path, []byte(text), 0o644)
+			require.NoError(t, err)
 		}
 	}
 	git("init", "--quiet")
@@ -343,55 +330,48 @@ func TestCompareRefusals(t *testing.T) {
 	}
 
 	_, err := resolveSide(repo, sideBase, "no-such-ref")
-	if !errors.Is(err, errRefUnresolved) || errors.Is(err, errRefBuild) || !strings.Contains(err.Error(), `-base "no-such-ref": the ref does not resolve to a commit`) {
-		t.Errorf("an unresolvable ref: %v", err)
-	}
-	if _, err := resolveSide(repo, sideHead, "--help"); !errors.Is(err, errRefUnresolved) {
-		t.Errorf("a ref that is an option: %v", err)
+	assert.Falsef(t, !errors.Is(err, errRefUnresolved) || errors.Is(err, errRefBuild) || !strings.Contains(err.Error(), `-base "no-such-ref": the ref does not resolve to a commit`), "an unresolvable ref: %v", err)
+	{
+		_, err := resolveSide(repo, sideHead, "--help")
+		assert.ErrorIsf(t, err, errRefUnresolved, "a ref that is an option: %v", err)
 	}
 
 	work := t.TempDir()
 	broken, err := resolveSide(repo, sideHead, "broken")
-	if err != nil {
-		t.Fatal(err)
-	}
+	require.NoError(t, err)
 	err = buildSide(goCmd, repo, filepath.Join(work, "head"), "internal/bench", &broken)
-	if !errors.Is(err, errRefBuild) || errors.Is(err, errRefUnresolved) || !strings.Contains(err.Error(), `-head "broken" (`+broken.commit[:12]+"): the ref does not build: go test -c ./internal/bench") {
-		t.Errorf("an unbuildable ref: %v", err)
-	}
-	if broken.worktree == "" {
-		t.Fatal("the worktree of the unbuildable ref is not recorded, so it cannot be removed")
-	}
+	assert.Falsef(t, !errors.Is(err, errRefBuild) || errors.Is(err, errRefUnresolved) || !strings.Contains(err.Error(), `-head "broken" (`+broken.commit[:12]+"): the ref does not build: go test -c ./internal/bench"), "an unbuildable ref: %v", err)
+	require.False(t, broken.worktree == "", "the worktree of the unbuildable ref is not recorded, so it cannot be removed")
 	removeWorktree(repo, &broken)
-	if _, err := os.Stat(filepath.Join(work, "head")); !os.IsNotExist(err) {
-		t.Errorf("the worktree of the unbuildable ref is still there: %v", err)
+	{
+		_, err := os.Stat(filepath.Join(work, "head"))
+		assert.Truef(t, os.IsNotExist(err), "the worktree of the unbuildable ref is still there: %v", err)
 	}
 
 	good, err := resolveSide(repo, sideBase, "good")
-	if err != nil {
-		t.Fatal(err)
-	}
+	require.NoError(t, err)
 	same, err := resolveSide(repo, sideHead, good.commit)
-	if err != nil {
-		t.Fatal(err)
+	require.NoError(t, err)
+	assert.Falsef(t, same.tree != good.tree || same.tree == broken.tree, "trees: good %s, its commit %s, broken %s", good.tree, same.tree, broken.tree)
+	{
+		r := (&compareReport{base: good, head: same})
+		assert.True(t, r.sameTree(), "two refs of one tree are not a same-tree control")
 	}
-	if same.tree != good.tree || same.tree == broken.tree {
-		t.Errorf("trees: good %s, its commit %s, broken %s", good.tree, same.tree, broken.tree)
+	{
+		r := (&compareReport{base: good, head: broken})
+		assert.False(t, r.sameTree(), "two trees are a same-tree control")
 	}
-	if r := (&compareReport{base: good, head: same}); !r.sameTree() {
-		t.Error("two refs of one tree are not a same-tree control")
-	}
-	if r := (&compareReport{base: good, head: broken}); r.sameTree() {
-		t.Error("two trees are a same-tree control")
-	}
-	if err := buildSide(goCmd, repo, filepath.Join(work, "base"), "internal/bench", &good); err != nil {
-		t.Fatalf("a ref that builds: %v", err)
+	{
+		err := buildSide(goCmd, repo, filepath.Join(work, "base"), "internal/bench", &good)
+		require.NoErrorf(t, err, "a ref that builds: %v", err)
 	}
 	defer removeWorktree(repo, &good)
-	if _, err := os.Stat(good.bin); err != nil {
-		t.Errorf("the test binary: %v", err)
+	{
+		_, err := os.Stat(good.bin)
+		assert.NoErrorf(t, err, "the test binary: %v", err)
 	}
-	if out, err := gitOutput(good.worktree, "status", "--porcelain"); err != nil || out != "" {
-		t.Errorf("the worktree is not clean: %q, %v", out, err)
+	{
+		out, err := gitOutput(good.worktree, "status", "--porcelain")
+		assert.Falsef(t, err != nil || out != "", "the worktree is not clean: %q, %v", out, err)
 	}
 }

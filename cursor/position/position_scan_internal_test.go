@@ -5,6 +5,9 @@ import (
 	"slices"
 	"testing"
 	"unicode/utf8"
+
+	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
 )
 
 // scanOneRuneAtATime is the loop of Scan before 2026-11-23: one utf8.DecodeRune
@@ -52,11 +55,11 @@ func TestScanMatchesOneRuneAtATime(t *testing.T) {
 			gl, gc, gotOff := got.Scan(in[:n])
 			wl, wc, wo := scanOneRuneAtATime(want, in[:n])
 			if gl != wl || gc != wc || gotOff != wo {
-				t.Fatalf("Scan(%q) returned %d:%d@%d, want %d:%d@%d", in[:n], gl, gc, gotOff, wl, wc, wo)
+				require.FailNowf(t, "unexpected test state", "Scan(%q) returned %d:%d@%d, want %d:%d@%d", in[:n], gl, gc, gotOff, wl, wc, wo)
 			}
 			if got.line() != want.line() || got.column() != want.column() || got.offset != want.offset ||
 				!slices.Equal(got.runesPerLine, want.runesPerLine) || !slices.Equal(got.bytesPerLine, want.bytesPerLine) {
-				t.Fatalf("after Scan(%q): %+v, want %+v", in[:n], got, want)
+				require.FailNowf(t, "unexpected test state", "after Scan(%q): %+v, want %+v", in[:n], got, want)
 			}
 			in = in[n:]
 		}
@@ -70,11 +73,13 @@ func TestScanEmptyAfterScanRunes(t *testing.T) {
 	p := New()
 	p.AdvanceBytes(1)
 	p.ScanRunes([]byte("x"))
-	if line, column, offset := p.Scan(nil); line != 1 || column != 1 || offset != 1 {
-		t.Errorf("Scan(nil) = %d:%d@%d, want 1:1@1", line, column, offset)
+	{
+		line, column, offset := p.Scan(nil)
+		assert.Falsef(t, line != 1 || column != 1 || offset != 1, "Scan(nil) = %d:%d@%d, want 1:1@1", line, column, offset)
 	}
-	if line, column, offset := p.State(); line != 1 || column != 1 || offset != 1 {
-		t.Errorf("after Scan(nil): %d:%d@%d, want 1:1@1", line, column, offset)
+	{
+		line, column, offset := p.State()
+		assert.Falsef(t, line != 1 || column != 1 || offset != 1, "after Scan(nil): %d:%d@%d, want 1:1@1", line, column, offset)
 	}
 }
 
@@ -103,9 +108,7 @@ func TestScanAfterScanRunesMatchesOneRuneAtATime(t *testing.T) {
 			case 0:
 				gp := scanPanics(func() { got.Scan([]byte("ab\n")) })
 				wp := scanPanics(func() { scanOneRuneAtATime(want, []byte("ab\n")) })
-				if gp != wp {
-					t.Fatalf("setup Scan: panicked %v, one decode per rune panicked %v", gp, wp)
-				}
+				require.Truef(t, gp == wp, "setup Scan: panicked %v, one decode per rune panicked %v", gp, wp)
 				broken = gp
 			default:
 				r := runesOnly[rng.Intn(len(runesOnly))]
@@ -126,19 +129,13 @@ func TestScanAfterScanRunesMatchesOneRuneAtATime(t *testing.T) {
 			var gl, gc, gotOff, wl, wc, wo int
 			gp := scanPanics(func() { gl, gc, gotOff = got.Scan(in) })
 			wp := scanPanics(func() { wl, wc, wo = scanOneRuneAtATime(want, in) })
-			if gp != wp {
-				t.Fatalf("Scan(%q): panicked %v, one decode per rune panicked %v", in, gp, wp)
-			}
+			require.Truef(t, gp == wp, "Scan(%q): panicked %v, one decode per rune panicked %v", in, gp, wp)
 			if gp {
 				break
 			}
-			if gl != wl || gc != wc || gotOff != wo {
-				t.Fatalf("Scan(%q) returned %d:%d@%d, want %d:%d@%d", in, gl, gc, gotOff, wl, wc, wo)
-			}
-			if got.line() != want.line() || got.column() != want.column() || got.offset != want.offset ||
-				!slices.Equal(got.runesPerLine, want.runesPerLine) || !slices.Equal(got.bytesPerLine, want.bytesPerLine) {
-				t.Fatalf("after Scan(%q): %+v, want %+v", in, got, want)
-			}
+			require.Falsef(t, gl != wl || gc != wc || gotOff != wo, "Scan(%q) returned %d:%d@%d, want %d:%d@%d", in, gl, gc, gotOff, wl, wc, wo)
+			require.Falsef(t, got.line() != want.line() || got.column() != want.column() || got.offset != want.offset ||
+				!slices.Equal(got.runesPerLine, want.runesPerLine) || !slices.Equal(got.bytesPerLine, want.bytesPerLine), "after Scan(%q): %+v, want %+v", in, got, want)
 		}
 	}
 }
@@ -149,10 +146,12 @@ func TestScanNewlineAfterScanRunes(t *testing.T) {
 	p := New()
 	p.AdvanceBytes(1)
 	p.ScanRunes([]byte("x"))
-	if line, column, offset := p.Scan([]byte("\n")); line != 1 || column != 1 || offset != 1 {
-		t.Errorf("Scan(newline) = %d:%d@%d, want 1:1@1", line, column, offset)
+	{
+		line, column, offset := p.Scan([]byte("\n"))
+		assert.Falsef(t, line != 1 || column != 1 || offset != 1, "Scan(newline) = %d:%d@%d, want 1:1@1", line, column, offset)
 	}
-	if line, column, offset := p.State(); line != 2 || column != 0 || offset != 2 {
-		t.Errorf("after Scan(newline): %d:%d@%d, want 2:0@2", line, column, offset)
+	{
+		line, column, offset := p.State()
+		assert.Falsef(t, line != 2 || column != 0 || offset != 2, "after Scan(newline): %d:%d@%d, want 2:0@2", line, column, offset)
 	}
 }

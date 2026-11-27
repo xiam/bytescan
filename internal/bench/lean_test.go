@@ -6,6 +6,8 @@ import (
 	"io"
 	"testing"
 
+	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
 	"github.com/xiam/bytescan"
 	"github.com/xiam/bytescan/cursor"
 	"github.com/xiam/bytescan/internal/leanread"
@@ -64,9 +66,7 @@ func leanLex(t *testing.T, c Case, cur bytescan.Cursor) (tokens uint64, count in
 		if err == io.EOF {
 			return th.Sum64(), count, h.sum
 		}
-		if err != nil {
-			t.Fatalf("%s: token %d: %v", c.name, count, err)
-		}
+		require.NoErrorf(t, err, "%s: token %d: %v", c.name, count, err)
 		lt := leanToken{typ: tok.Type(), text: tok.Text(), span: tok.Span(), la: la}
 		s, e := lt.span.Start(), lt.span.End()
 		_, _ = th.Write([]byte(lt.typ))
@@ -106,21 +106,16 @@ func TestLeanReadPathReferenceCases(t *testing.T) {
 			}
 
 			leanCur := c.newCursor(bytes.NewReader(in))
-			if _, ok := leanread.Of(leanCur); !ok {
-				t.Fatalf("%s: the cursor of the case has no lean read path", c.name)
+			{
+				_, ok := leanread.Of(leanCur)
+				require.Truef(t, ok, "%s: the cursor of the case has no lean read path", c.name)
 			}
 			gotTok, gotN, gotShown := leanLex(t, c, leanCur)
 			wantTok, wantN, wantShown := leanLex(t, c, publicCursor{c.newCursor(bytes.NewReader(in))})
 
-			if gotN != wantN {
-				t.Errorf("%s: %d tokens on the lean path, %d on the public path", c.name, gotN, wantN)
-			}
-			if gotTok != wantTok {
-				t.Errorf("%s: the tokens differ between the lean path and the public path", c.name)
-			}
-			if gotShown != wantShown {
-				t.Errorf("%s: the symbols shown to the rules differ between the lean path and the public path", c.name)
-			}
+			assert.Truef(t, gotN == wantN, "%s: %d tokens on the lean path, %d on the public path", c.name, gotN, wantN)
+			assert.Truef(t, gotTok == wantTok, "%s: the tokens differ between the lean path and the public path", c.name)
+			assert.Truef(t, gotShown == wantShown, "%s: the symbols shown to the rules differ between the lean path and the public path", c.name)
 		})
 	}
 }

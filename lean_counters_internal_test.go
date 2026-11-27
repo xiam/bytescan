@@ -7,6 +7,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/stretchr/testify/assert"
 	"github.com/xiam/bytescan/cursor"
 	"github.com/xiam/bytescan/internal/counters"
 )
@@ -46,30 +47,19 @@ func TestLeanReadPathCounters(t *testing.T) {
 
 				ca, _ := counters.OfCursor(a)
 				cb, _ := counters.OfCursor(b)
-				if capacity > 8 && ca.Locks >= cb.Locks {
-					t.Errorf("Locks: lean %d, public %d; want fewer on the lean path", ca.Locks, cb.Locks)
-				}
-				if ca.Compactions > cb.Compactions || ca.CompactBytes > cb.CompactBytes || ca.FloorScans > cb.FloorScans {
-					t.Errorf("Compactions, CompactBytes, FloorScans: lean %d, %d, %d, public %d, %d, %d; want at most as many on the lean path",
-						ca.Compactions, ca.CompactBytes, ca.FloorScans, cb.Compactions, cb.CompactBytes, cb.FloorScans)
-				}
+				assert.Falsef(t, capacity > 8 && ca.Locks >= cb.Locks, "Locks: lean %d, public %d; want fewer on the lean path", ca.Locks, cb.Locks)
+				assert.Falsef(t, ca.Compactions > cb.Compactions || ca.CompactBytes > cb.CompactBytes || ca.FloorScans > cb.FloorScans, "Compactions, CompactBytes, FloorScans: lean %d, %d, %d, public %d, %d, %d; want at most as many on the lean path", ca.Compactions, ca.CompactBytes, ca.FloorScans, cb.Compactions, cb.CompactBytes, cb.FloorScans)
 				ca.Locks, cb.Locks = 0, 0
 				ca.Compactions, cb.Compactions = 0, 0
 				ca.CompactBytes, cb.CompactBytes = 0, 0
 				ca.FloorScans, cb.FloorScans = 0, 0
-				if ca != cb {
-					t.Errorf("cursor counters:\nlean   %+v\npublic %+v", ca, cb)
-				}
+				assert.Truef(t, ca == cb, "cursor counters:\nlean   %+v\npublic %+v", ca, cb)
 				sa, _ := counters.OfScanner(lean)
 				sb, _ := counters.OfScanner(public)
-				if sa.StepBacks != 0 || sa.StepBackBytes != 0 {
-					t.Errorf("StepBacks, StepBackBytes: lean %d, %d; want 0, 0", sa.StepBacks, sa.StepBackBytes)
-				}
+				assert.Falsef(t, sa.StepBacks != 0 || sa.StepBackBytes != 0, "StepBacks, StepBackBytes: lean %d, %d; want 0, 0", sa.StepBacks, sa.StepBackBytes)
 				sa.StepBacks, sb.StepBacks = 0, 0
 				sa.StepBackBytes, sb.StepBackBytes = 0, 0
-				if sa != sb {
-					t.Errorf("scanner counters:\nlean   %+v\npublic %+v", sa, sb)
-				}
+				assert.Truef(t, sa == sb, "scanner counters:\nlean   %+v\npublic %+v", sa, sb)
 			})
 		}
 	}

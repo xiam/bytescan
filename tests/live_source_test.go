@@ -7,6 +7,7 @@ import (
 	"time"
 
 	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
 	"github.com/xiam/bytescan"
 	"github.com/xiam/bytescan/cursor"
 	"github.com/xiam/bytescan/rules/base"
@@ -97,11 +98,9 @@ func TestScannerReturnsTokensFromLiveSource(t *testing.T) {
 			for len(tokens) > 0 {
 				got = append(got, <-tokens)
 			}
-			if len(got) < len(want) {
-				t.Fatalf("the source blocked after %d of %d tokens: %q", len(got), len(want), got)
-			}
+			require.Falsef(t, len(got) < len(want), "the source blocked after %d of %d tokens: %q", len(got), len(want), got)
 		case <-timeout:
-			t.Fatalf("timed out after %d of %d tokens: %q", len(got), len(want), got)
+			require.FailNowf(t, "unexpected test state", "timed out after %d of %d tokens: %q", len(got), len(want), got)
 		}
 	}
 

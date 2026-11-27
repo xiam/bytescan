@@ -1,7 +1,6 @@
 package tests
 
 import (
-	"errors"
 	"io"
 	"regexp"
 	"strings"
@@ -376,7 +375,7 @@ func TestRegexpConformance(t *testing.T) {
 				lx.MustAddRule(lexTypeR, row.rule)
 
 				lex, err := lx.Next()
-				assert.True(t, errors.Is(err, io.EOF), "Next on empty input: %v", err)
+				assert.ErrorIs(t, err, io.EOF, "Next on empty input: %v", err)
 				assert.Nil(t, lex)
 			})
 

@@ -201,7 +201,7 @@ func TestNullableRepetitionWithLookahead(t *testing.T) {
 				case got := <-done:
 					assert.Equal(t, tc.Expected, got, "input %q", tc.Input)
 				case <-time.After(5 * time.Second):
-					t.Fatalf("input %q: lexing did not finish", tc.Input)
+					require.FailNowf(t, "unexpected test state", "input %q: lexing did not finish", tc.Input)
 				}
 			}
 		})

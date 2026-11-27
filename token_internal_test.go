@@ -3,6 +3,9 @@ package bytescan
 import (
 	"strings"
 	"testing"
+
+	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
 )
 
 func TestScannerSharesSingleASCIIRuneText(t *testing.T) {
@@ -14,9 +17,7 @@ func TestScannerSharesSingleASCIIRuneText(t *testing.T) {
 		var tokens []*Token
 		for range input {
 			tok, err := sc.Next()
-			if err != nil {
-				t.Fatal(err)
-			}
+			require.NoError(t, err)
 			tokens = append(tokens, tok)
 		}
 		return tokens
@@ -25,14 +26,13 @@ func TestScannerSharesSingleASCIIRuneText(t *testing.T) {
 	for i, r := range []rune(input) {
 		a, b := left[i], right[i]
 		if a.Text() != string(r) || b.Text() != string(r) || a.Type() != "LEFT" || b.Type() != "RIGHT" {
-			t.Fatalf("rune %U: got %q (%s) and %q (%s)", r, a.Text(), a.Type(), b.Text(), b.Type())
+			require.FailNowf(t, "unexpected test state", "rune %U: got %q (%s) and %q (%s)", r, a.Text(), a.Type(), b.Text(), b.Type())
 		}
-		if shared := &a.text[0] == &b.text[0]; shared != (r < 128) {
-			t.Errorf("rune %U: shared text = %t", r, shared)
+		{
+			shared := &a.text[0] == &b.text[0]
+			assert.Truef(t, shared == (r < 128), "rune %U: shared text = %t", r, shared)
 		}
 		renamed := a.WithType("RENAMED")
-		if renamed.Text() != a.Text() || renamed.Span() != a.Span() || a.Type() != "LEFT" {
-			t.Errorf("rune %U: relabeling changed the original type, text or span", r)
-		}
+		assert.Falsef(t, renamed.Text() != a.Text() || renamed.Span() != a.Span() || a.Type() != "LEFT", "rune %U: relabeling changed the original type, text or span", r)
 	}
 }

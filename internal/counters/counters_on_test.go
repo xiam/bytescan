@@ -8,6 +8,8 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
 	"github.com/xiam/bytescan"
 	"github.com/xiam/bytescan/cursor"
 	"github.com/xiam/bytescan/internal/counters"
@@ -20,26 +22,23 @@ import (
 func cursorCounters(t *testing.T, r *cursor.Reader) counters.Cursor {
 	t.Helper()
 	c, ok := counters.OfCursor(r)
-	if !ok {
-		t.Fatal("OfCursor returned false in the build with the tag bench")
-	}
+	require.True(t, ok, "OfCursor returned false in the build with the tag bench")
 	return c
 }
 
 func scannerCounters(t *testing.T, sc *bytescan.Scanner) counters.Scanner {
 	t.Helper()
 	s, ok := counters.OfScanner(sc)
-	if !ok {
-		t.Fatal("OfScanner returned false in the build with the tag bench")
-	}
+	require.True(t, ok, "OfScanner returned false in the build with the tag bench")
 	return s
 }
 
 func readRunes(t *testing.T, r *cursor.Reader, n int) {
 	t.Helper()
 	for i := 0; i < n; i++ {
-		if _, _, err := r.ReadRune(); err != nil {
-			t.Fatalf("ReadRune %d: %v", i, err)
+		{
+			_, _, err := r.ReadRune()
+			require.NoErrorf(t, err, "ReadRune %d: %v", i, err)
 		}
 	}
 }
@@ -48,13 +47,15 @@ func TestOfWrongValues(t *testing.T) {
 	var nilReader *cursor.Reader
 	var nilScanner *bytescan.Scanner
 	for _, v := range []any{nil, 1, nilReader, bytescan.New(strings.NewReader(""))} {
-		if _, ok := counters.OfCursor(v); ok {
-			t.Errorf("OfCursor(%T) returned true", v)
+		{
+			_, ok := counters.OfCursor(v)
+			assert.Falsef(t, ok, "OfCursor(%T) returned true", v)
 		}
 	}
 	for _, v := range []any{nil, 1, nilScanner, cursor.New(strings.NewReader(""))} {
-		if _, ok := counters.OfScanner(v); ok {
-			t.Errorf("OfScanner(%T) returned true", v)
+		{
+			_, ok := counters.OfScanner(v)
+			assert.Falsef(t, ok, "OfScanner(%T) returned true", v)
 		}
 	}
 }
@@ -69,13 +70,15 @@ func TestOfWrongValues(t *testing.T) {
 func TestCursorFillsAndLocks(t *testing.T) {
 	r := cursor.NewReader(strings.NewReader("abc"), cursor.WithCapacity(16))
 	readRunes(t, r, 3)
-	if _, _, err := r.ReadRune(); err != io.EOF {
-		t.Fatalf("ReadRune at the end = %v, want io.EOF", err)
+	{
+		_, _, err := r.ReadRune()
+		require.Truef(t, err == io.EOF, "ReadRune at the end = %v, want io.EOF", err)
 	}
 
 	want := counters.Cursor{Fills: 2, FillBytes: 3, MaxBuffer: 16, Locks: 4}
-	if got := cursorCounters(t, r); got != want {
-		t.Fatalf("got %+v\nwant %+v", got, want)
+	{
+		got := cursorCounters(t, r)
+		require.Truef(t, got == want, "got %+v\nwant %+v", got, want)
 	}
 }
 
@@ -94,8 +97,9 @@ func TestCursorFillsAndLocks(t *testing.T) {
 func TestCursorCompactions(t *testing.T) {
 	r := cursor.NewReader(strings.NewReader("abcdefghij"), cursor.WithCapacity(8))
 	readRunes(t, r, 10)
-	if _, _, err := r.ReadRune(); err != io.EOF {
-		t.Fatalf("ReadRune at the end = %v, want io.EOF", err)
+	{
+		_, _, err := r.ReadRune()
+		require.Truef(t, err == io.EOF, "ReadRune at the end = %v, want io.EOF", err)
 	}
 
 	want := counters.Cursor{
@@ -104,8 +108,9 @@ func TestCursorCompactions(t *testing.T) {
 		MaxBuffer: 8,
 		Locks:     11,
 	}
-	if got := cursorCounters(t, r); got != want {
-		t.Fatalf("got %+v\nwant %+v", got, want)
+	{
+		got := cursorCounters(t, r)
+		require.Truef(t, got == want, "got %+v\nwant %+v", got, want)
 	}
 }
 
@@ -128,8 +133,9 @@ func TestCursorGrowsAndFloorScans(t *testing.T) {
 	r := cursor.NewReader(strings.NewReader("abcdef"), cursor.WithCapacity(4))
 	r.Checkpoint()
 	readRunes(t, r, 6)
-	if _, _, err := r.ReadRune(); err != io.EOF {
-		t.Fatalf("ReadRune at the end = %v, want io.EOF", err)
+	{
+		_, _, err := r.ReadRune()
+		require.Truef(t, err == io.EOF, "ReadRune at the end = %v, want io.EOF", err)
 	}
 
 	want := counters.Cursor{
@@ -138,8 +144,9 @@ func TestCursorGrowsAndFloorScans(t *testing.T) {
 		Locks:      8,
 		FloorScans: 9,
 	}
-	if got := cursorCounters(t, r); got != want {
-		t.Fatalf("got %+v\nwant %+v", got, want)
+	{
+		got := cursorCounters(t, r)
+		require.Truef(t, got == want, "got %+v\nwant %+v", got, want)
 	}
 }
 
@@ -153,13 +160,15 @@ func TestCursorRetentionFloorScans(t *testing.T) {
 	r.Checkpoint()
 	r.Checkpoint()
 	readRunes(t, r, 1)
-	if got := r.RetainedBytes(); got != 1 {
-		t.Fatalf("RetainedBytes = %d, want 1", got)
+	{
+		got := r.RetainedBytes()
+		require.Truef(t, got == 1, "RetainedBytes = %d, want 1", got)
 	}
 
 	want := counters.Cursor{Fills: 1, FillBytes: 3, MaxBuffer: 16, Locks: 4, FloorScans: 4}
-	if got := cursorCounters(t, r); got != want {
-		t.Fatalf("got %+v\nwant %+v", got, want)
+	{
+		got := cursorCounters(t, r)
+		require.Truef(t, got == want, "got %+v\nwant %+v", got, want)
 	}
 }
 
@@ -171,15 +180,18 @@ func TestCursorReplays(t *testing.T) {
 	r := cursor.NewReader(strings.NewReader("abcdef"), cursor.WithCapacity(16))
 	cp := r.Checkpoint()
 	readRunes(t, r, 4)
-	if err := cp.Reset(); err != nil {
-		t.Fatal(err)
+	{
+		err := cp.Reset()
+		require.NoError(t, err)
 	}
 	readRunes(t, r, 2)
-	if err := cp.Reset(); err != nil {
-		t.Fatal(err)
+	{
+		err := cp.Reset()
+		require.NoError(t, err)
 	}
-	if err := cp.Release(); err != nil {
-		t.Fatal(err)
+	{
+		err := cp.Release()
+		require.NoError(t, err)
 	}
 
 	want := counters.Cursor{
@@ -188,8 +200,9 @@ func TestCursorReplays(t *testing.T) {
 		Replays:   2, ReplayBytes: 6,
 		Locks: 10,
 	}
-	if got := cursorCounters(t, r); got != want {
-		t.Fatalf("got %+v\nwant %+v", got, want)
+	{
+		got := cursorCounters(t, r)
+		require.Truef(t, got == want, "got %+v\nwant %+v", got, want)
 	}
 }
 
@@ -218,17 +231,14 @@ func TestCursorFillsOfARuneSource(t *testing.T) {
 	readRunes(t, r, 2)
 
 	c := cursorCounters(t, r)
-	if c.Fills != 2 || c.FillBytes != 5 || src.reads != 2 {
-		t.Fatalf("after 2 runes: Fills %d, FillBytes %d, source reads %d; want 2, 5, 2", c.Fills, c.FillBytes, src.reads)
-	}
+	require.Falsef(t, c.Fills != 2 || c.FillBytes != 5 || src.reads != 2, "after 2 runes: Fills %d, FillBytes %d, source reads %d; want 2, 5, 2", c.Fills, c.FillBytes, src.reads)
 
-	if _, _, err := r.ReadRune(); err != io.EOF {
-		t.Fatalf("ReadRune at the end = %v, want io.EOF", err)
+	{
+		_, _, err := r.ReadRune()
+		require.Truef(t, err == io.EOF, "ReadRune at the end = %v, want io.EOF", err)
 	}
 	c = cursorCounters(t, r)
-	if c.Fills != 3 || c.FillBytes != 5 || src.reads != 3 {
-		t.Fatalf("at the end: Fills %d, FillBytes %d, source reads %d; want 3, 5, 3", c.Fills, c.FillBytes, src.reads)
-	}
+	require.Falsef(t, c.Fills != 3 || c.FillBytes != 5 || src.reads != 3, "at the end: Fills %d, FillBytes %d, source reads %d; want 3, 5, 3", c.Fills, c.FillBytes, src.reads)
 }
 
 // aRun matches a+: it accepts each 'a' and stays active, and rejects any other
@@ -282,9 +292,7 @@ func lexAll(t *testing.T, sc *bytescan.Scanner) []string {
 		if err == io.EOF {
 			return texts
 		}
-		if err != nil {
-			t.Fatal(err)
-		}
+		require.NoError(t, err)
 		texts = append(texts, string(tok.Type())+":"+tok.Text())
 	}
 }
@@ -311,8 +319,9 @@ func TestScannerCounters(t *testing.T) {
 	sc.MustAddRule("SP", literal(' '))
 
 	got := lexAll(t, sc)
-	if want := []string{"A:aa", "SP: ", "UNKNOWN:b"}; strings.Join(got, "|") != strings.Join(want, "|") {
-		t.Fatalf("tokens %q, want %q", got, want)
+	{
+		want := []string{"A:aa", "SP: ", "UNKNOWN:b"}
+		require.Truef(t, strings.Join(got, "|") == strings.Join(want, "|"), "tokens %q, want %q", got, want)
 	}
 
 	want := counters.Scanner{
@@ -323,8 +332,9 @@ func TestScannerCounters(t *testing.T) {
 		Unknown:   1,
 		Abandons:  counters.Abandons{EndOfInput: 1},
 	}
-	if got := scannerCounters(t, sc); got != want {
-		t.Fatalf("got %+v\nwant %+v", got, want)
+	{
+		got := scannerCounters(t, sc)
+		require.Truef(t, got == want, "got %+v\nwant %+v", got, want)
 	}
 }
 
@@ -343,8 +353,9 @@ func TestScannerStepBacks(t *testing.T) {
 	sc.MustAddRule("SP", literal(' '))
 
 	got := lexAll(t, sc)
-	if want := []string{"A:aa", "SP: ", "UNKNOWN:b"}; strings.Join(got, "|") != strings.Join(want, "|") {
-		t.Fatalf("tokens %q, want %q", got, want)
+	{
+		want := []string{"A:aa", "SP: ", "UNKNOWN:b"}
+		require.Truef(t, strings.Join(got, "|") == strings.Join(want, "|"), "tokens %q, want %q", got, want)
 	}
 
 	want := counters.Scanner{
@@ -356,8 +367,9 @@ func TestScannerStepBacks(t *testing.T) {
 		Abandons:  counters.Abandons{EndOfInput: 1},
 		StepBacks: 1, StepBackBytes: 1,
 	}
-	if got := scannerCounters(t, sc); got != want {
-		t.Fatalf("got %+v\nwant %+v", got, want)
+	{
+		got := scannerCounters(t, sc)
+		require.Truef(t, got == want, "got %+v\nwant %+v", got, want)
 	}
 }
 
@@ -382,8 +394,9 @@ func TestScannerPushbacksAndLongTokens(t *testing.T) {
 	sc.MustAddRule("C", cRun)
 
 	got := lexAll(t, sc)
-	if want := []string{"AB:a", "B:b", "C:" + strings.Repeat("c", 10)}; strings.Join(got, "|") != strings.Join(want, "|") {
-		t.Fatalf("tokens %q, want %q", got, want)
+	{
+		want := []string{"AB:a", "B:b", "C:" + strings.Repeat("c", 10)}
+		require.Truef(t, strings.Join(got, "|") == strings.Join(want, "|"), "tokens %q, want %q", got, want)
 	}
 
 	want := counters.Scanner{
@@ -395,8 +408,9 @@ func TestScannerPushbacksAndLongTokens(t *testing.T) {
 		LongTokens: 1,
 		Abandons:   counters.Abandons{EndOfInput: 1},
 	}
-	if got := scannerCounters(t, sc); got != want {
-		t.Fatalf("got %+v\nwant %+v", got, want)
+	{
+		got := scannerCounters(t, sc)
+		require.Truef(t, got == want, "got %+v\nwant %+v", got, want)
 	}
 }
 
@@ -433,11 +447,13 @@ func TestScannerAbandons(t *testing.T) {
 	sc := bytescan.NewWithCursor(r)
 	sc.MustAddRule("A", aRun)
 
-	if _, err := sc.Next(); err != bytescan.ErrMoreInput {
-		t.Fatalf("first Next: %v, want ErrMoreInput", err)
+	{
+		_, err := sc.Next()
+		require.Truef(t, err == bytescan.ErrMoreInput, "first Next: %v, want ErrMoreInput", err)
 	}
-	if _, err := sc.Next(); !errors.Is(err, errBoom) {
-		t.Fatalf("second Next: %v, want %v", err, errBoom)
+	{
+		_, err := sc.Next()
+		require.ErrorIsf(t, err, errBoom, "second Next: %v, want %v", err, errBoom)
 	}
 
 	want := counters.Scanner{
@@ -446,12 +462,11 @@ func TestScannerAbandons(t *testing.T) {
 		MaxLive:   1,
 		Abandons:  counters.Abandons{MoreInput: 1, Error: 1},
 	}
-	if got := scannerCounters(t, sc); got != want {
-		t.Fatalf("got %+v\nwant %+v", got, want)
+	{
+		got := scannerCounters(t, sc)
+		require.Truef(t, got == want, "got %+v\nwant %+v", got, want)
 	}
 
 	c := cursorCounters(t, r)
-	if c.Fills != 3 || c.FillBytes != 1 || c.Replays != 2 || c.ReplayBytes != 2 {
-		t.Fatalf("cursor counters %+v: want 3 fills of 1 byte and 2 replays of 2 bytes", c)
-	}
+	require.Falsef(t, c.Fills != 3 || c.FillBytes != 1 || c.Replays != 2 || c.ReplayBytes != 2, "cursor counters %+v: want 3 fills of 1 byte and 2 replays of 2 bytes", c)
 }
