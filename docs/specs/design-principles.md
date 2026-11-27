@@ -306,8 +306,9 @@ meaningful.
   `large`, without `slip`; the 5 percent floor and the rerun rule as for the
   lanes; and a table "Outside references" in each text case of the report,
   with a fixed paragraph on what each tool does and does not do. The
-  references are not lanes. Current contract; see
-  [The outside references](measurement.md#the-outside-references).
+  references are not lanes. The JSON case later added the standard library's
+  streaming decoder. See [The outside references](measurement.md#the-outside-references)
+  for the current contract.
 - **2026-11-20 — the names and the format of the statelex report.** The
   owner approved, in the words "Approve as proposed", the benchmark
   `BenchmarkEdit/<set>/<shape>/<size>` in a test file of `statelex`, its sets,

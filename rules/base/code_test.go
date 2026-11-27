@@ -305,6 +305,33 @@ func TestCodeEndOfInput(t *testing.T) {
 	}
 }
 
+// TestRawDelimiterLookahead checks the byte reach when the first rune of
+// a Unicode closer is body text, starts the closer, or is followed by EOF.
+func TestRawDelimiterLookahead(t *testing.T) {
+	const matched = "<界x界界é界"
+	for _, tc := range []struct {
+		input string
+		typ   bytescan.TokenType
+		text  string
+		look  bytescan.Lookahead
+	}{
+		{matched + "!", "RAW", matched, bytescan.Lookahead{}},
+		{matched, "RAW", matched, bytescan.Lookahead{}},
+		{"<界é\n界é界", bytescan.TokenTypeUnknown, "<", bytescan.Lookahead{After: len("界é\n")}},
+		{"<界é", bytescan.TokenTypeUnknown, "<", bytescan.Lookahead{After: len("界é"), ReadEnd: true}},
+	} {
+		t.Run(tc.input, func(t *testing.T) {
+			sc := bytescan.New(strings.NewReader(tc.input))
+			sc.MustAddRule("RAW", base.Raw("<", "界é界"))
+			tok, look, err := sc.NextLookahead()
+			require.NoError(t, err)
+			assert.Equal(t, tc.typ, tok.Type())
+			assert.Equal(t, tc.text, tok.Text())
+			assert.Equal(t, tc.look, look)
+		})
+	}
+}
+
 // TestCodeLongTokens: a token of 1<<15 runes is lexed as one token by each
 // rule whose text can grow without bound. A rule whose cost grew with the
 // square of the token length would take minutes here.

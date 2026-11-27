@@ -77,8 +77,7 @@ type Case struct {
 	input func() ([]byte, error)
 }
 
-// findCase returns the case named name: a reference case, a cold case or a
-// case of unicodeCases.
+// findCase returns the reference or optional case named name.
 func findCase(name string) (Case, bool) {
 	for _, c := range namedCases() {
 		if c.name == name {
@@ -89,9 +88,11 @@ func findCase(name string) (Case, bool) {
 }
 
 // namedCases returns the reference cases, then the cases that a comparison
-// runs only when -cases names them: the cold cases and unicodeCases.
+// runs only when -cases names them.
 func namedCases() []Case {
-	return append(append(cases(), coldCases()...), unicodeCases()...)
+	named := append(cases(), coldCases()...)
+	named = append(named, unicodeCases()...)
+	return append(named, longJSONCase())
 }
 
 // result is what one run of a case counted.

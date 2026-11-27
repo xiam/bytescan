@@ -11,8 +11,8 @@
 // wrapped lanes, and the build with the tag bench, which runs the
 // instrumented lane. Each run is one process that lexes one case once in one
 // lane (BenchmarkCase with -test.benchtime 1x). A round runs the three lanes
-// of a case, and on a text case the two outside references
-// (BenchmarkReference), and the first run rotates from round to round.
+// of a case and any outside references (BenchmarkReference). The first
+// run rotates from round to round.
 //
 // For each case it compares the lanes with benchstat. When the spread of a
 // lane is above the limit, it runs the case again with twice the runs; when

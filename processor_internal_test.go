@@ -328,3 +328,56 @@ func TestPushBackShowsWideSymbols(t *testing.T) {
 	assert.Equal(t, want, shown)
 	assert.NotEmpty(t, rp.wide)
 }
+
+// Check that stepping only the remaining rule still allows an earlier
+// retired rule to win by length or by registration order.
+func TestProcessSoleSurvivor(t *testing.T) {
+	for _, tc := range []struct {
+		name      string
+		pushbacks int
+		want      TokenType
+		length    int
+	}{
+		{"retired rule has longer accept", 3, "early", 2},
+		{"retired rule registered first", 2, "early", 2},
+		{"survivor has longer accept", 1, "late", 3},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			var calls []string
+			var early, late Rule
+			early = func(s Symbol) (Rule, State) {
+				calls = append(calls, "early:"+string(s.Rune()))
+				if s.Rune() == 'a' {
+					return early, StateContinue
+				}
+				return nil, StateAccept
+			}
+			late = func(s Symbol) (Rule, State) {
+				if s.IsEOF() {
+					calls = append(calls, "late:EOF")
+					return excludeLast(tc.pushbacks, StateAccept)
+				}
+				calls = append(calls, "late:"+string(s.Rune()))
+				return late, StateContinue
+			}
+			rp := newRulesProcessor([]TokenType{"early", "late"}, map[TokenType]Rule{
+				"early": early,
+				"late":  late,
+			})
+
+			for attempt := 0; attempt < 2; attempt++ {
+				calls = nil
+				for _, r := range "abc" {
+					typ, length := rp.Process(NewSymbol(r, FlagNone))
+					assert.Equal(t, TokenTypeUnknown, typ)
+					assert.Equal(t, -1, length)
+				}
+				typ, length := rp.Process(NewSymbol(RuneEOF, FlagEOF))
+				assert.Equal(t, tc.want, typ)
+				assert.Equal(t, tc.length, length)
+				assert.Equal(t, []string{"early:a", "late:a", "early:b", "late:b", "late:c", "late:EOF"}, calls)
+				rp.Reset()
+			}
+		})
+	}
+}

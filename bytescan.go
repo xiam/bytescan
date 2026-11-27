@@ -1036,21 +1036,7 @@ func (sc *Scanner) nextToken() (*Token, Lookahead, error) {
 			return abandon(fmt.Errorf("%w: match of %d symbols exceeds the %d symbols read", ErrInternal, textLen, read))
 		}
 
-		// The winner is a prefix of the real symbols on the stack, so it never
-		// includes the EOF symbol. Its runes are copied out below, before the
-		// next token's Reset reuses the stack.
-		//
-		// A short token's text is stored inline, in the same allocation as
-		// its Token; a longer one gets its own array (see tokenBox).
-		var box *tokenBox
-		var runes []rune
-		if textLen <= inlineTokenRunes {
-			box = new(tokenBox)
-			runes = box.text[:textLen:textLen]
-		} else {
-			runes = make([]rune, textLen)
-		}
-		spanBytes := processor.CopyText(runes)
+		runes, box, spanBytes := processor.tokenText(textLen)
 
 		if sc.lean != nil && !sc.leanPartial {
 			// The lean read path left the cursor at the start of the token.
@@ -1131,7 +1117,7 @@ func (sc *Scanner) commit(typ TokenType, runes []rune, box *tokenBox, span curso
 	}
 	sc.marksNext = next
 
-	sc.ctr.token(typ, box == nil)
+	sc.ctr.token(typ, len(runes) > inlineTokenRunes)
 
 	if box != nil {
 		box.token = Token{typ: typ, text: runes, offset: span.Start().RuneOffset(), span: span}

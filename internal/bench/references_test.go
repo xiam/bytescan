@@ -2,8 +2,10 @@ package bench
 
 import (
 	"bytes"
+	"encoding/json"
 	"io"
 	"regexp"
+	"slices"
 	"testing"
 
 	"github.com/xiam/bytescan"
@@ -41,8 +43,12 @@ func TestReferencesLex(t *testing.T) {
 			}
 			continue
 		}
-		if got := references(c); len(got) != 2 || got[0] != textScanner || got[1] != regexpLexer {
-			t.Fatalf("%s: references %v, want textscanner and regexp", c.name, got)
+		wantRefs := []tool{textScanner, regexpLexer}
+		if c.name == "json" {
+			wantRefs = append(wantRefs, jsonDecoder)
+		}
+		if got := references(c); !slices.Equal(got, wantRefs) {
+			t.Fatalf("%s: references %v, want %v", c.name, got, wantRefs)
 		}
 		in, ok := refInput(t, c)
 		if !ok {
@@ -96,7 +102,7 @@ func TestReferencesLex(t *testing.T) {
 			}
 		}
 
-		// Both references through refLex, twice: the counts do not depend
+		// Run each reference through refLex twice. The counts do not depend
 		// on the run.
 		for _, tl := range references(c) {
 			first, err := refLex(c, tl, in, nop, nop)
@@ -117,12 +123,64 @@ func TestReferencesLex(t *testing.T) {
 	}
 }
 
-// TestRefLexRejects checks that the regexp lexer fails on a byte that no
-// token class matches, and that refLex refuses an unknown reference.
+// TestJSONDecoderEvents compares the two APIs through EOF on the exact
+// benchmark input. The lexer exposes separators and whitespace as tokens,
+// and keeps scalar values in their source spelling.
+func TestJSONDecoderEvents(t *testing.T) {
+	c, _ := findCase("json")
+	in := input(t, c)
+
+	scanner := bytescan.NewWithCursor(c.newCursor(bytes.NewReader(in)))
+	for _, rr := range c.rules() {
+		scanner.MustAddRule(rr.typ, rr.rule)
+	}
+	decoder := json.NewDecoder(bytes.NewReader(in))
+	var events uint64
+	for {
+		tok, err := scanner.Next()
+		if err == io.EOF {
+			break
+		}
+		if err != nil {
+			t.Fatal(err)
+		}
+		var want json.Token
+		switch tok.Type() {
+		case "WHITESPACE", "NAME_SEPARATOR", "VALUE_SEPARATOR":
+			continue
+		case "BEGIN_ARRAY", "BEGIN_OBJECT", "END_ARRAY", "END_OBJECT":
+			want = json.Delim(tok.Text()[0])
+		case "STRING", "NUMBER", "TRUE", "FALSE", "NULL":
+			if err := json.Unmarshal([]byte(tok.Text()), &want); err != nil {
+				t.Fatalf("decode lexer token at byte %d: %v", tok.ByteOffset(), err)
+			}
+		default:
+			t.Fatalf("unexpected lexer token %s at byte %d", tok.Type(), tok.ByteOffset())
+		}
+		got, err := decoder.Token()
+		if err != nil || got != want {
+			t.Fatalf("event %d at byte %d: got %v (%v), want %v", events, tok.ByteOffset(), got, err, want)
+		}
+		events++
+	}
+	if _, err := decoder.Token(); err != io.EOF {
+		t.Fatalf("decoder did not reach EOF with the lexer: %v", err)
+	}
+	if got, err := refLex(c, jsonDecoder, in, nop, nop); err != nil || got != (refResult{Tokens: events}) {
+		t.Fatalf("timed reference counted %+v (%v), want %d events and no errors", got, err, events)
+	}
+}
+
+// TestRefLexRejects checks that regexp and jsondecoder stop on invalid
+// input, and that refLex refuses an unknown reference.
 func TestRefLexRejects(t *testing.T) {
 	c, _ := findCase("large")
 	if _, err := refLex(c, regexpLexer, []byte("a ="), nop, nop); err == nil {
 		t.Errorf("the regexp lexer accepted %q", "a =")
+	}
+	jsonCase, _ := findCase("json")
+	if _, err := refLex(jsonCase, jsonDecoder, []byte("[}"), nop, nop); err == nil {
+		t.Error("the JSON decoder accepted mismatched delimiters")
 	}
 	if _, err := refLex(c, "lex", []byte("a"), nop, nop); err == nil {
 		t.Errorf("refLex accepted an unknown reference")

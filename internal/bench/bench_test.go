@@ -101,7 +101,7 @@ func BenchmarkCase(b *testing.B) {
 }
 
 // BenchmarkReference runs the outside references on every text case:
-// BenchmarkReference/<case>/<tool>, with the tools textscanner and regexp.
+// BenchmarkReference/<case>/<tool>, with the tools selected by references.
 // Its timer runs only from before the first token to after the last one, as
 // that of BenchmarkCase. It logs the counts of the run as a line
 // "reference {...}" (JSON of refResult) that the runner reads. The lane of

@@ -93,28 +93,19 @@ func RawMultiline(open, close string) bytescan.Rule {
 	return codeDelimited(open, close, core.AnyRune)
 }
 
-// codeDelimited returns the rule for open(?:(?!close)[allowed])*close: open,
-// then runes of allowed, up to the first close. The match is unique, because
-// close must not start at any position before the close that ends it.
-//
-// The lookahead (?!close) is checked at each position after open and before
-// the last rune of the text, as the end of the part before that position:
-// either close follows open at once, or open and the runes before the last
-// one are each not followed by close, and the last rune is followed by close.
-// Each lookahead reads at most len(close) symbols, so the cost stays linear
-// in the length of the text.
+// codeDelimited matches the opener, a body ending before the first complete
+// closer, and the closer itself.
 func codeDelimited(open, close string, allowed core.Class) bytescan.Rule {
-	openLit, closeLit := core.Literal(open), core.Literal(close)
-	text := core.Rune(allowed)
-	return core.Choice(
-		core.Sequence(openLit, closeLit),
-		core.Sequence(
-			core.NotFollowedBy(openLit, closeLit),
-			core.ZeroOrMore(core.NotFollowedBy(text, closeLit)),
-			text,
-			closeLit,
-		),
-	)
+	first, width := utf8.DecodeRuneInString(close)
+	startsClose := core.RuneSet(string(first))
+	bodyRune := core.Rune(allowed.And(startsClose.Not()))
+	if suffix := close[width:]; suffix != "" {
+		// A false start belongs to the body. For the closer "*/" in "**/",
+		// the first star is body text and the second starts the closer.
+		falseStart := core.NotFollowedBy(core.Rune(allowed.And(startsClose)), core.Literal(suffix))
+		bodyRune = core.Choice(bodyRune, falseStart)
+	}
+	return core.Sequence(core.Literal(open), core.ZeroOrMore(bodyRune), core.Literal(close))
 }
 
 // mustCodeRune panics if r is not a valid rune. fn and arg name the caller

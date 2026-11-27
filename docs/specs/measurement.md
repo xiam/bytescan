@@ -408,26 +408,27 @@ file of `tests/`.
 **Current contract** (owner decision, 2026-11-20, in the words "Approve as
 proposed"; source symbols `references`, `tokenClasses`, `refLex` and
 `BenchmarkReference` in `internal/bench`; tests `TestReferencesLex`,
-`TestRefLexRejects` and `TestReferenceSummary`). Two lexers from outside
-bytescan run on the input of each text case, so a reader can see the scale of
-a rate. They are not lanes: a reference has none of the instruments of the
-lanes, and `bench.Lane` keeps its three values.
+`TestJSONDecoderEvents`, `TestRefLexRejects` and `TestReferenceSummary`).
+Outside references run on each text case to give the scale of a rate.
+`bench.Lane` keeps its three values and its instruments apply to those lanes.
 
 | Tool | What it is |
 | --- | --- |
 | `textscanner` | `text/scanner` of the standard library, with its default mode: the tokens of Go, white space and comments skipped |
 | `regexp` | one regular expression of the standard library: an anchored alternation of the token classes of the case, one group for each rule in the order of the rule set, with leftmost-longest matching (`Regexp.Longest`), matched again at the end of each token |
+| `jsondecoder` | `encoding/json.Decoder.Token` of the standard library, with default scalar decoding, for the `json` case |
 
 - **The text cases** are `json`, `code`, `stream` and `large`. `slip` has no
   reference, because its input is binary.
 - **The benchmark** is `BenchmarkReference/<case>/<tool>`. It reads the input
   of the case from memory, and its timer covers the interval from before the
   first token to after the last one, as that of `BenchmarkCase`. The setup of
-  a reference, such as the compilation of the regular expression, is outside
-  it.
+  a reference, such as compiling the regular expression or constructing
+  the decoder, is outside it. The JSON decoder reads the same sequence of
+  JSON documents as the lanes. Its final call returning EOF is timed.
 - **The rounds.** The references run in the rounds of their case, after the
-  three lanes, in the normal build. The first run of a round rotates over the
-  five runs, so no run always comes first.
+  three lanes, in the normal build. The first run of a round rotates over
+  all runs of the case. The JSON decoder follows `regexp` in the rotation.
 - **The spread.** The 5 percent floor, the spread limit and the rerun rule
   apply to a reference as to a lane: a reference above the limit makes its
   case rerun, and then inconclusive.
@@ -440,9 +441,13 @@ lanes, and `bench.Lane` keeps its three values.
   `TestReferencesLex` checks the types and the byte offsets on `json`, `code`,
   `large` and the first 1 MiB of `stream`, and the runner checks the token
   count on every whole input. It needs the whole input in one byte slice and
-  does not build a token with its text and position. The report states this
-  in a fixed paragraph, so that the reader does not take the numbers as the
-  same work.
+  does not build a token with its text and position. `jsondecoder` checks
+  delimiter nesting as it reads and decodes scalar values. Its Tokens count
+  is the number of returned values and delimiters. The stream omits white
+  space, commas and colons, and its events carry no Bytescan spans.
+  `TestJSONDecoderEvents` checks the values and delimiters against Bytescan
+  through EOF, outside the benchmark timer. A decoder error fails the run.
+  The report describes the work each reference performs.
 
 ## The report format
 
@@ -549,14 +554,15 @@ Outside references, on the same input in the same rounds:
 | --- | --- | --- | --- | --- | --- | --- | --- |
 | textscanner | ‹T_t› | ± ‹s_t› % | ‹R_t› MB/s | ‹A_t› | ‹B_t› | ‹TK_t› | ‹E_t› |
 | regexp | ‹T_r› | ± ‹s_r› % | ‹R_r› MB/s | ‹A_r› | ‹B_r› | ‹TK_r› | ‹E_r› |
+| jsondecoder | ‹T_j› | ± ‹s_j› % | ‹R_j› MB/s | ‹A_j› | ‹B_j› | ‹TK_j› | ‹E_j› |
 
 ‹the fixed paragraph on what each tool does and does not do›
 ```
 
 A case marked inconclusive keeps its lane table and its spreads, and its rate
 column says "inconclusive" instead of a rate. The same holds for its table of
-the outside references. A case that is not a text case has no table of the
-outside references.
+the outside references. The `jsondecoder` row appears only for `json`.
+The binary case has no outside-reference table.
 
 ## The statelex report
 

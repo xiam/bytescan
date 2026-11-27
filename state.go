@@ -34,6 +34,12 @@ const (
 	// gives a rule multi-symbol lookahead and must end in (nil, StateAccept) or
 	// StateReject. See "Rule states and pushback" in
 	// docs/specs/rule-vm-contract.md.
+	//
+	// A rule may need to inspect earlier symbols to know how many to exclude.
+	// Each pushback gives the continuation the symbol just excluded, so it can
+	// accept the remaining prefix or keep walking back. When several boundaries
+	// qualify, this lets the rule choose a longer match (greedy) or a shorter
+	// one (ungreedy).
 	StatePushBack
 )
 

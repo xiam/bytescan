@@ -34,13 +34,40 @@ type Token struct {
 // stores inline with its Token.
 const inlineTokenRunes = 8
 
-// tokenBox holds a Token and the text of a short token in one allocation.
+// tokenBox holds a Token and its unshared short text in one allocation.
 // The scanner returns &box.token, whose text slices box.text, so the pointer
 // keeps the whole box, text included, alive. A token longer than
 // inlineTokenRunes keeps its text in a separate array.
 type tokenBox struct {
 	token Token
 	text  [inlineTokenRunes]rune
+}
+
+// asciiTokenText is read-only after initialization. Each entry can back the text
+// of any scanner-produced token for that rune, regardless of its type or span.
+var asciiTokenText = func() (table [128][1]rune) {
+	for i := range table {
+		table[i][0] = rune(i)
+	}
+	return table
+}()
+
+// tokenText keeps the winning prefix valid across the processor's next Reset.
+// Its byte length comes from the input symbols, including on custom cursors.
+func (rp *rulesProcessor) tokenText(n int) ([]rune, *tokenBox, int) {
+	if n == 1 {
+		s := rp.at(0)
+		if r := s.Rune(); uint32(r) < uint32(len(asciiTokenText)) {
+			return asciiTokenText[r][:], nil, s.Size()
+		}
+	}
+	if n <= inlineTokenRunes {
+		box := new(tokenBox)
+		text := box.text[:n:n]
+		return text, box, rp.CopyText(text)
+	}
+	text := make([]rune, n)
+	return text, nil, rp.CopyText(text)
 }
 
 // NewToken creates and returns a new Token.

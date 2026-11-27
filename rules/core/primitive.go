@@ -8,9 +8,7 @@ import (
 	"github.com/xiam/bytescan"
 )
 
-// newPrimitive is the one construction path of every primitive. Each
-// primitive constructor validates its arguments, builds the start state of
-// the rule and its node n, and returns newPrimitive(start, n). The returned
+// newPrimitive wraps a primitive's start state with its node n. The returned
 // rule behaves as start, and a combinator that receives it composes n instead
 // of running start as an opaque rule (see handshake.go). A combinator builds
 // its rule with newCombinator.
@@ -26,7 +24,20 @@ func Literal(s string) bytescan.Rule {
 		panic("core.Literal: s must not be empty")
 	}
 	lit := []rune(s)
-	return newPrimitive(literalChain(lit)[0], leafNode(literalMatcher{lit: lit}))
+	n := leafNode(literalMatcher{lit: lit})
+	if len(lit) == 1 {
+		// Handle both the construction probe and scanning in one call.
+		want := lit[0]
+		return func(s bytescan.Symbol) (bytescan.Rule, bytescan.State) {
+			if isProbe(s) {
+				answerProbe(n, s)
+			} else if s.Rune() == want && !s.IsEOF() {
+				return nil, bytescan.StateAccept
+			}
+			return nil, bytescan.StateReject
+		}
+	}
+	return newPrimitive(literalChain(lit)[0], n)
 }
 
 // literalChain builds the states of Literal once, when the rule is

@@ -2,13 +2,15 @@ package bench
 
 import (
 	"bytes"
+	"encoding/json"
 	"fmt"
+	"io"
 	"regexp"
 	"strings"
 	"text/scanner"
 )
 
-// tool is an outside reference: a lexer from outside bytescan that runs on
+// tool is an outside reference: a tokenizer from outside bytescan that runs on
 // the input of a text case, in the same rounds as the lanes (owner decision,
 // 2026-11-20, "Approve as proposed"). A reference is not a lane: no
 // reference has the instruments of the lanes.
@@ -24,10 +26,15 @@ const (
 	// anchored alternation of the token classes of the case, with
 	// leftmost-longest matching.
 	regexpLexer tool = "regexp"
+	// jsonDecoder is encoding/json.Decoder.Token on the JSON case.
+	jsonDecoder tool = "jsondecoder"
 )
 
-// allTools lists the references in the order of the report.
-var allTools = []tool{textScanner, regexpLexer}
+// The reference lists follow report order.
+var (
+	textTools = []tool{textScanner, regexpLexer}
+	allTools  = []tool{textScanner, regexpLexer, jsonDecoder}
+)
 
 // tokenClasses holds, for each text case, one regular expression for each
 // rule of its rule set, in the order of registration. The classes match the
@@ -56,11 +63,14 @@ var tokenClasses = map[string][]string{
 	"large":  {`[A-Za-z_][A-Za-z0-9_]*`, `[ \t\n\r]+`},
 }
 
-// references returns the outside references of case c: both tools for a
-// text case, none for slip.
+// references returns the outside references for case c. The JSON case
+// adds the streaming decoder to the references shared by the text cases.
 func references(c Case) []tool {
-	if _, ok := tokenClasses[c.name]; ok {
+	if c.name == "json" {
 		return allTools
+	}
+	if _, ok := tokenClasses[c.name]; ok {
+		return textTools
 	}
 	return nil
 }
@@ -77,10 +87,10 @@ func refPattern(c Case) string {
 
 // refResult is what one run of a reference counted.
 type refResult struct {
-	// Tokens is the number of tokens that the reference returned.
+	// Tokens is the number of tokens or decoder events the reference returned.
 	Tokens uint64
-	// Errors is the number of errors that text/scanner reported. The
-	// regexp lexer stops at its first error, so it is 0 for it.
+	// Errors is the number of errors that text/scanner reported. The other
+	// references stop at their first error.
 	Errors uint64
 }
 
@@ -105,6 +115,21 @@ func refLex(c Case, t tool, in []byte, start, stop func()) (refResult, error) {
 		}
 		stop()
 		res.Errors = uint64(s.ErrorCount)
+		return res, nil
+	case jsonDecoder:
+		decoder := json.NewDecoder(bytes.NewReader(in))
+		var err error
+		start()
+		for {
+			if _, err = decoder.Token(); err != nil {
+				break
+			}
+			res.Tokens++
+		}
+		stop()
+		if err != io.EOF {
+			return res, fmt.Errorf("bench: case %s, reference %s: %w", c.name, t, err)
+		}
 		return res, nil
 	case regexpLexer:
 		re, err := regexp.Compile(refPattern(c))
